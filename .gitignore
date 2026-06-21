@@ -1,0 +1,31 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs and runtime output
+logs/
+*.log
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local installers / binaries
+Miniconda3-latest-Linux-x86_64.sh
+
+# Model checkpoints and weights (keep local, do not version)
+ckpt/
+
+# Temporary files
+tmp_*.py
+
+# Notebook checkpoints
+.ipynb_checkpoints/
