@@ -24,6 +24,10 @@ Miniconda3-latest-Linux-x86_64.sh
 # Model checkpoints and weights (keep local, do not version)
 ckpt/
 
+# Local nested copies / broken gitlinks
+IDM-VTON/
+IP-Adapter/
+
 # Temporary files
 tmp_*.py
 
