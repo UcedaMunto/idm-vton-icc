@@ -32,6 +32,135 @@ conda env create -f environment.yaml
 conda activate idm
 ```
 
+### Hardware and system requirements
+
+- Linux (recommended for CUDA support)
+- Python 3.10
+- NVIDIA GPU with CUDA support for practical inference speed
+- NVIDIA driver installed and visible via `nvidia-smi`
+- Enough RAM/VRAM for SDXL-based try-on workloads (CPU-only mode is supported but much slower)
+
+### Verify if IDM-VTON is using GPU
+
+Run these checks after activating the `idm` environment:
+
+```bash
+nvidia-smi
+python -c "import torch; print(torch.__version__); print('cuda', torch.cuda.is_available()); print('torch_cuda', torch.version.cuda); print('gpus', torch.cuda.device_count())"
+```
+
+Expected for GPU acceleration:
+
+- `nvidia-smi` should work and list your GPU
+- `torch.cuda.is_available()` should be `True`
+- `torch.version.cuda` should be non-empty (example: `11.8`)
+
+If you see `+cpu` builds (for example `torch 2.x+cpu`) or `cuda False`, IDM-VTON is running on CPU.
+
+### If your environment is CPU-only
+
+Install CUDA-enabled PyTorch wheels in the `idm` environment (example for CUDA 11.8):
+
+```bash
+conda activate idm
+python -m pip install --upgrade --force-reinstall \
+    torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+```
+
+Then verify again:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.version.cuda)"
+```
+
+Note: CUDA wheels require a compatible NVIDIA driver on the host machine.
+
+### Installation workflow used in this project (Ubuntu 24.04 + RTX 3060)
+
+The following sequence was executed and validated on this machine:
+
+1. Detect hardware and recommended driver
+
+```bash
+lspci | grep -Ei 'vga|3d|nvidia'
+ubuntu-drivers devices
+```
+
+2. Install NVIDIA driver (recommended profile)
+
+```bash
+sudo apt update
+sudo apt install -y nvidia-driver-595-open
+```
+
+3. Verify driver stack
+
+```bash
+nvidia-smi
+```
+
+4. Free space before installing CUDA wheels (torch wheel is large)
+
+```bash
+conda clean -p -t -y
+python -m pip cache purge
+df -h /
+```
+
+5. Install CUDA-enabled torch stack in `idm`
+
+```bash
+conda activate idm
+python -m pip install --upgrade --force-reinstall \
+    torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+```
+
+6. Final verification
+
+```bash
+nvidia-smi
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available(), torch.version.cuda, torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+python -m pip check
+```
+
+Expected output on this setup:
+
+- `torch 2.0.1+cu118`
+- `torch.cuda.is_available() == True`
+- `NVIDIA GeForce RTX 3060` detected
+
+### Why disk appears small if the physical disk is 1TB
+
+If `lsblk` shows an NVMe disk near 1TB but `df -h /` shows around 100G, the root filesystem is on an LVM logical volume with a limited size.
+
+Example observed here:
+
+- Physical disk: `nvme0n1` about 931G
+- Volume group: `ubuntu-vg` about 929G total
+- Root logical volume: `ubuntu-lv` only 100G
+- Free space inside VG: about 829G not yet assigned to `/`
+
+To verify your own layout:
+
+```bash
+df -h /
+lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT,TYPE
+sudo vgs
+sudo lvs
+```
+
+To expand root (advanced, run carefully):
+
+```bash
+sudo lvextend -l +100%FREE /dev/ubuntu-vg/ubuntu-lv
+sudo resize2fs /dev/ubuntu-vg/ubuntu-lv
+df -h /
+```
+
+This does not add a new disk; it grows the existing root filesystem to use free space already available in the same LVM volume group.
+
 ## Data preparation
 
 ### VITON-HD
@@ -185,9 +314,14 @@ ckpt
 
 Run the following command:
 
-```python
-python gradio_demo/app.py
+```bash
+IDMVTON_LOW_RAM=1 IDMVTON_SHARE=0 python gradio_demo/app.py
 ```
+
+Runtime flags:
+
+- `IDMVTON_LOW_RAM=1`: lower peak RAM usage (slower startup/inference)
+- `IDMVTON_SHARE=0`: local-only mode (avoids public share tunnel)
 
 
 
