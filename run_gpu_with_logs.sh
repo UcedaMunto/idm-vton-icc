@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$ROOT_DIR/.env"
 LOG_DIR="$ROOT_DIR/logs"
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/idmvton_gpu_${TS}.log"
@@ -9,6 +10,12 @@ LATEST_LINK="$LOG_DIR/latest.log"
 APP_FILE="$ROOT_DIR/gradio_demo/app.py"
 
 mkdir -p "$LOG_DIR"
+
+if [[ -f "$ENV_FILE" ]]; then
+	set -a
+	source "$ENV_FILE"
+	set +a
+fi
 
 if [[ ! -f "$APP_FILE" ]]; then
 	echo "ERROR: app file not found at $APP_FILE"

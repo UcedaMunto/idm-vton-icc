@@ -131,6 +131,30 @@ Expected output on this setup:
 - `torch.cuda.is_available() == True`
 - `NVIDIA GeForce RTX 3060` detected
 
+### Fix for `cached_download` import error (`diffusers` + `huggingface_hub`)
+
+If this command fails:
+
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate idm && which python && python -c "import huggingface_hub, diffusers; print('hub', huggingface_hub.__version__); print('diffusers', diffusers.__version__)"
+```
+
+with this error:
+
+- `ImportError: cannot import name 'cached_download' from 'huggingface_hub'`
+
+run the compatibility fix (validated on this machine):
+
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate idm && python -m pip install --upgrade --force-reinstall "huggingface_hub==0.25.2" && python -c "import huggingface_hub, diffusers; print('hub', huggingface_hub.__version__); print('diffusers', diffusers.__version__)"
+```
+
+Expected output after fix:
+
+- `hub 0.25.2`
+- `diffusers 0.25.0`
+- no `ImportError`
+
 ### Why disk appears small if the physical disk is 1TB
 
 If `lsblk` shows an NVMe disk near 1TB but `df -h /` shows around 100G, the root filesystem is on an LVM logical volume with a limited size.

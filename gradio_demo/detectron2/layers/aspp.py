@@ -13,7 +13,7 @@ from .wrappers import Conv2d
 
 class ASPP(nn.Module):
     """
-    Atrous Spatial Pyramid Pooling (ASPP).
+    Atrous Spatial Pyramid Pooling (ASPP, agrupación espacial piramidal con dilatación).
     """
 
     def __init__(
@@ -30,27 +30,26 @@ class ASPP(nn.Module):
     ):
         """
         Args:
-            in_channels (int): number of input channels for ASPP.
-            out_channels (int): number of output channels.
-            dilations (list): a list of 3 dilations in ASPP.
-            norm (str or callable): normalization for all conv layers.
-                See :func:`layers.get_norm` for supported format. norm is
-                applied to all conv layers except the conv following
-                global average pooling.
-            activation (callable): activation function.
-            pool_kernel_size (tuple, list): the average pooling size (kh, kw)
-                for image pooling layer in ASPP. If set to None, it always
-                performs global average pooling. If not None, it must be
-                divisible by the shape of inputs in forward(). It is recommended
-                to use a fixed input feature size in training, and set this
-                option to match this size, so that it performs global average
-                pooling in training, and the size of the pooling window stays
-                consistent in inference.
-            dropout (float): apply dropout on the output of ASPP. It is used in
-                the official DeepLab implementation with a rate of 0.1:
+            in_channels (int): número de canales de entrada para ASPP.
+            out_channels (int): número de canales de salida.
+            dilations (list): lista de 3 dilataciones en ASPP.
+            norm (str or callable): normalización para todas las capas convolucionales.
+                Consulte :func:`layers.get_norm` para ver el formato admitido. La norma
+                se aplica a todas las capas convolucionales excepto a la convolución que sigue
+                al pooling global promedio.
+            activation (callable): función de activación.
+            pool_kernel_size (tuple, list): tamaño del pooling promedio (kh, kw)
+                para la capa de pooling de imagen en ASPP. Si se establece en None, siempre
+                realiza pooling global promedio. Si no es None, debe ser divisible por la forma
+                de las entradas en forward(). Se recomienda usar un tamaño de entrada fijo en
+                entrenamiento y ajustar esta opción para que coincida con ese tamaño, de modo que
+                realice pooling global promedio en entrenamiento y el tamaño de la ventana de pooling
+                se mantenga consistente en inferencia.
+            dropout (float): aplica dropout sobre la salida de ASPP. Se utiliza en la
+                implementación oficial de DeepLab con una tasa de 0.1:
                 https://github.com/tensorflow/models/blob/21b73d22f3ed05b650e85ac50849408dd36de32e/research/deeplab/model.py#L532  # noqa
-            use_depthwise_separable_conv (bool): use DepthwiseSeparableConv2d
-                for 3x3 convs in ASPP, proposed in :paper:`DeepLabV3+`.
+            use_depthwise_separable_conv (bool): usa DepthwiseSeparableConv2d
+                para las convoluciones 3x3 en ASPP, propuesto en :paper:`DeepLabV3+`.
         """
         super(ASPP, self).__init__()
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
@@ -58,7 +57,7 @@ class ASPP(nn.Module):
         self.dropout = dropout
         use_bias = norm == ""
         self.convs = nn.ModuleList()
-        # conv 1x1
+        # convolución 1x1
         self.convs.append(
             Conv2d(
                 in_channels,
@@ -70,7 +69,7 @@ class ASPP(nn.Module):
             )
         )
         weight_init.c2_xavier_fill(self.convs[-1])
-        # atrous convs
+        # convoluciones atrous
         for dilation in dilations:
             if use_depthwise_separable_conv:
                 self.convs.append(
@@ -100,9 +99,9 @@ class ASPP(nn.Module):
                     )
                 )
                 weight_init.c2_xavier_fill(self.convs[-1])
-        # image pooling
-        # We do not add BatchNorm because the spatial resolution is 1x1,
-        # the original TF implementation has BatchNorm.
+        # pooling de imagen
+        # No añadimos BatchNorm porque la resolución espacial es 1x1,
+        # la implementación original de TensorFlow sí usa BatchNorm.
         if pool_kernel_size is None:
             image_pooling = nn.Sequential(
                 nn.AdaptiveAvgPool2d(1),
