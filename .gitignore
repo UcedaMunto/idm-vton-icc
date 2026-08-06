@@ -33,3 +33,5 @@ tmp_*.py
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+*.md.env
+dataset/

@@ -221,25 +221,54 @@ Recomendado en una sola GPU:
 - `num_processes=1`
 - `mixed_precision=fp16`
 
-### 7.4 Lanzar entrenamiento (comando recomendado para 12GB)
+### 7.4 Secuencia completa (copiar y ejecutar en orden)
 
 ```bash
+# 0) Entrar al proyecto y activar entorno
 cd /home/uceda/Documents/IDM-VTON
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate idm
+
+# 1) Definir rutas principales (OBLIGATORIO ajustar DATA_DIR)
+export DATA_DIR=/ruta/real/a/tu/dataset/VITON-HD/zalando
+export OUTPUT_DIR=/home/uceda/Documents/IDM-VTON/result_train
+
+# 2) Definir parámetros de entrenamiento
+export TRAIN_BATCH_SIZE=1
+export TEST_BATCH_SIZE=1
+export NUM_TRAIN_EPOCHS=130
+export LOGGING_STEPS=1000
+export CHECKPOINT_EPOCH=10
+export MIXED_PRECISION=fp16
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:64
+
+# 3) Verificaciones rápidas antes de lanzar
+echo "DATA_DIR=$DATA_DIR"
+test -d "$DATA_DIR" || { echo "ERROR: DATA_DIR no existe"; return 1; }
+test -f "$DATA_DIR/train/vitonhd_train_tagged.json" || { echo "ERROR: falta train/vitonhd_train_tagged.json"; return 1; }
+test -f "$DATA_DIR/test/vitonhd_test_tagged.json" || { echo "ERROR: falta test/vitonhd_test_tagged.json"; return 1; }
+which accelerate || { echo "ERROR: accelerate no está en PATH"; return 1; }
+
+# 4) Recuperación de caché SDXL corrupta (seguro si ya está bien)
+rm -rf ~/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0
+
+# 5) Lanzar entrenamiento
 accelerate launch train_xl.py \
   --gradient_checkpointing \
   --use_8bit_adam \
-  --mixed_precision=fp16 \
-  --train_batch_size=1 \
-  --test_batch_size=1 \
-  --num_train_epochs=130 \
-  --logging_steps=1000 \
-  --checkpointing_epoch=10 \
-  --output_dir=/home/uceda/Documents/IDM-VTON/result_train \
-  --data_dir=DATA_DIR
+  --mixed_precision=${MIXED_PRECISION} \
+  --train_batch_size=${TRAIN_BATCH_SIZE} \
+  --test_batch_size=${TEST_BATCH_SIZE} \
+  --num_train_epochs=${NUM_TRAIN_EPOCHS} \
+  --logging_steps=${LOGGING_STEPS} \
+  --checkpointing_epoch=${CHECKPOINT_EPOCH} \
+  --output_dir=${OUTPUT_DIR} \
+  --data_dir=${DATA_DIR}
 ```
 
-Cambia `DATA_DIR` por tu ruta real del dataset.
+Nota:
+- Si ejecutas en shell no interactiva y falla `return 1`, reemplázalo por `exit 1`.
+- `DATA_DIR` no puede quedar vacío; debe apuntar a la carpeta del dataset con `train/` y `test/`.
 
 ---
 
