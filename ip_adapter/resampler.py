@@ -163,10 +163,12 @@ class Resampler(nn.Module):
 
     def forward(self, x):
 
+        if x.dtype != self.latents.dtype:
+            x = x.to(dtype=self.latents.dtype)
+
         latents = self.latents.repeat(x.size(0), 1, 1)
 
         x = self.proj_in(x)
-
 
         for attn, ff in self.layers:
             latents = attn(x, latents) + latents

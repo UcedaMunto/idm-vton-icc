@@ -331,7 +331,12 @@ class BasicTransformerBlock(nn.Module):
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
 
-        modify_norm_hidden_states = torch.cat([norm_hidden_states,garment_features[curr_garment_feat_idx]], dim=1)
+        garment_feature = garment_features[curr_garment_feat_idx]
+        if garment_feature.device != norm_hidden_states.device:
+            garment_feature = garment_feature.to(norm_hidden_states.device)
+        if garment_feature.dtype != norm_hidden_states.dtype:
+            garment_feature = garment_feature.to(norm_hidden_states.dtype)
+        modify_norm_hidden_states = torch.cat([norm_hidden_states, garment_feature], dim=1)
         curr_garment_feat_idx +=1
         attn_output = self.attn1(
             #norm_hidden_states,

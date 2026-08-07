@@ -1,0 +1,55 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+
+title Arquitectura runtime en RTX 3060 12GB
+
+node "Host Linux" {
+  node "Proceso Gradio\nPython" as APP {
+    component "app.py" as APPPY
+    component "Diffusers Pipeline" as DIFF
+    component "Modulo Masking" as MASK
+  }
+
+  node "GPU CUDA" as GPU {
+    component "UNet/atencion\nfloat16" as GUNET
+    component "VAE parcial" as GVAE
+  }
+
+  node "CPU RAM" as CPU {
+    component "Offload secuencial\nAccelerate" as OFFLOAD
+    component "OpenPose temporal" as OPOSECPU
+    component "DensePose en low-ram" as DPCPU
+  }
+
+  database "Cache HF\n~/.cache/huggingface" as CACHE
+  folder "Checkpoints locales\nckpt/" as CKPTS
+  folder "Logs\nlogs/latest.log" as LOGS
+}
+
+APPPY --> DIFF
+APPPY --> MASK
+MASK --> OPOSECPU
+MASK --> DPCPU
+DIFF --> GUNET
+DIFF --> GVAE
+DIFF <--> OFFLOAD : IDMVTON_CPU_OFFLOAD=1
+DIFF --> CACHE
+DIFF --> CKPTS
+APPPY --> LOGS
+
+note right of OFFLOAD
+Regla operativa:
+si hay offload activo, evitar
+movimientos manuales pipe.to(...)
+para no romper meta tensors.
+end note
+
+note bottom
+Objetivo del perfil 12GB:
+reducir picos de VRAM con fp16,
+attention slicing, VAE slicing/tiling,
+y resolucion reducida (576x768) en low-ram.
+end note
+
+@enduml

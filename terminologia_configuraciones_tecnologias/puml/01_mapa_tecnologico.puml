@@ -1,0 +1,81 @@
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+
+title IDM-VTON - Mapa tecnologico por capas
+
+package "Capa de Presentacion" {
+  component "Interfaz Gradio\ngradio_demo/app.py" as UI
+}
+
+package "Capa de Orquestacion" {
+  component "Pipeline de inferencia\nDiffusers SDXL" as PIPE
+  component "Launcher operacional\nrun_gpu_with_logs.sh" as LAUNCH
+  component "Config runtime\n.env" as ENV
+}
+
+package "Capa de Modelos IA" {
+  component "UNet SDXL" as UNET
+  component "VAE" as VAE
+  component "CLIP Text Encoder" as CLIPT
+  component "CLIP Image Encoder" as CLIPI
+  component "IP-Adapter" as IPA
+}
+
+package "Capa de Preprocesamiento" {
+  component "OpenPose" as OPENPOSE
+  component "DensePose" as DENSEPOSE
+  component "Human Parsing" as HPARSE
+}
+
+package "Capa de Entrenamiento" {
+  component "train_xl.py" as TRAIN
+  component "Accelerate" as ACC
+  component "PyTorch" as TORCH
+}
+
+package "Capa de Datos y Artefactos" {
+  database "Dataset VITON-HD\nDATA_DIR_PREP" as DATA
+  folder "Checkpoints\nckpt/" as CKPT
+  folder "Salida\nresult_train/" as OUT
+  cloud "Hugging Face Hub\n(cache local)" as HF
+}
+
+LAUNCH --> ENV : carga variables
+LAUNCH --> UI : inicia servicio
+ENV --> PIPE : controla modo runtime
+UI --> OPENPOSE
+UI --> DENSEPOSE
+UI --> HPARSE
+OPENPOSE --> PIPE
+DENSEPOSE --> PIPE
+HPARSE --> PIPE
+PIPE --> UNET
+PIPE --> VAE
+PIPE --> CLIPT
+PIPE --> CLIPI
+PIPE --> IPA
+CKPT --> CLIPI
+CKPT --> IPA
+HF --> PIPE : pesos base SDXL
+
+TRAIN --> ACC
+TRAIN --> TORCH
+TRAIN --> DATA
+TRAIN --> CKPT
+TRAIN --> OUT
+ACC --> UNET
+ACC --> VAE
+ACC --> CLIPT
+ACC --> CLIPI
+ACC --> IPA
+
+note bottom
+Idea clave:
+IDM-VTON combina una ruta de inferencia interactiva
+(Gradio + Diffusers + preprocesamiento) y otra ruta de
+entrenamiento (train_xl.py + Accelerate + dataset etiquetado).
+end note
+
+@enduml

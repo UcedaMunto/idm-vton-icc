@@ -2,7 +2,6 @@ import os
 import random
 import argparse
 import json
-import itertools
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -284,8 +283,22 @@ def parse_args():
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=0.0,
+        help="Gradient clipping norm. Default 0 disables clipping to avoid fp16/grad-scaler incompatibilities in this stack.",
+    )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--data_dir", type=str, default="/home/omnious/workspace/yisol/Dataset/VITON-HD/zalando", help="For distributed training: local_rank")
+    parser.add_argument("--train_num_workers", type=int, default=8, help="Number of dataloader workers for training.")
+    parser.add_argument("--test_num_workers", type=int, default=2, help="Number of dataloader workers for testing.")
+    parser.add_argument("--low_vram_training", action="store_true", help="Keep frozen modules on CPU and move only the tensors needed for the trainable UNet to GPU.")
+    parser.add_argument(
+        "--train_ip_adapter_only",
+        action="store_true",
+        help="Train only IP-Adapter layers (attention processors + image proj + conv_in) to reduce VRAM during backward.",
+    )
     
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -302,31 +315,51 @@ def main():
 
 
     args = parse_args()
+    effective_mixed_precision = args.mixed_precision
+    if args.low_vram_training and effective_mixed_precision == "fp16":
+        effective_mixed_precision = "no"
+
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir)
     accelerator = Accelerator(
-        mixed_precision=args.mixed_precision,
+        mixed_precision=effective_mixed_precision,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         project_config=accelerator_project_config,
     )
 
     if accelerator.is_main_process:
+        if args.low_vram_training and args.mixed_precision == "fp16":
+            accelerator.print(
+                "[train] disabling mixed precision for low-vram training to avoid AMP scaler incompatibilities on this setup"
+            )
         if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
+
+    weight_dtype = torch.float32
+    if effective_mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif effective_mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+    if args.low_vram_training:
+        weight_dtype = torch.float32
+        if accelerator.is_main_process:
+            accelerator.print("[train] using float32 weights in low-vram mode to keep CPU-side modules compatible")
+    cpu_dtype = torch.float32
 
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",rescale_betas_zero_snr=True)
     tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder")
+    text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", torch_dtype=cpu_dtype)
     tokenizer_2 = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2")
-    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2")
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,subfolder="vae",torch_dtype=torch.float16,)
-    unet_encoder = UNet2DConditionModel_ref.from_pretrained(args.pretrained_garmentnet_path, subfolder="unet")
+    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", torch_dtype=cpu_dtype)
+    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,subfolder="vae",torch_dtype=cpu_dtype,)
+    unet_encoder = UNet2DConditionModel_ref.from_pretrained(args.pretrained_garmentnet_path, subfolder="unet", torch_dtype=cpu_dtype)
     unet_encoder.config.addition_embed_type = None
     unet_encoder.config["addition_embed_type"] = None
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path)
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path, torch_dtype=cpu_dtype)
+    frozen_device = torch.device("cpu") if args.low_vram_training else accelerator.device
 
     #customize unet start
-    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet",low_cpu_mem_usage=False, device_map=None)
+    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet",low_cpu_mem_usage=False, device_map=None, torch_dtype=weight_dtype)
     unet.config.encoder_hid_dim = image_encoder.config.hidden_size
     unet.config.encoder_hid_dim_type = "ip_image_proj"
     unet.config["encoder_hid_dim"] = image_encoder.config.hidden_size
@@ -340,6 +373,7 @@ def main():
     adapter_modules.load_state_dict(state_dict["ip_adapter"],strict=True)
 
     #ip-adapter
+    image_proj_model_device = torch.device("cpu") if args.low_vram_training else accelerator.device
     image_proj_model = Resampler(
         dim=image_encoder.config.hidden_size,
         depth=4,
@@ -349,7 +383,7 @@ def main():
         embedding_dim=image_encoder.config.hidden_size,
         output_dim=unet.config.cross_attention_dim,
         ff_mult=4,
-    ).to(accelerator.device, dtype=torch.float32)
+    ).to(image_proj_model_device, dtype=weight_dtype)
 
     image_proj_model.load_state_dict(state_dict["image_proj"], strict=True)
     image_proj_model.requires_grad_(True)
@@ -361,7 +395,7 @@ def main():
         out_channels=unet.conv_in.out_channels,
         kernel_size=3,
         padding=1,
-    )
+    ).to(dtype=weight_dtype)
     torch.nn.init.kaiming_normal_(conv_new.weight)  
     conv_new.weight.data = conv_new.weight.data * 0.  
 
@@ -374,16 +408,12 @@ def main():
     #customize unet end
 
 
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-    vae.to(accelerator.device) 
-    text_encoder.to(accelerator.device, dtype=weight_dtype)
-    text_encoder_2.to(accelerator.device, dtype=weight_dtype)
-    image_encoder.to(accelerator.device, dtype=weight_dtype)
-    unet_encoder.to(accelerator.device, dtype=weight_dtype)
+    if not args.low_vram_training:
+        vae.to(accelerator.device)
+        text_encoder.to(accelerator.device, dtype=weight_dtype)
+        text_encoder_2.to(accelerator.device, dtype=weight_dtype)
+        image_encoder.to(accelerator.device, dtype=weight_dtype)
+        unet_encoder.to(accelerator.device, dtype=weight_dtype)
 
 
     vae.requires_grad_(False)
@@ -391,25 +421,40 @@ def main():
     text_encoder_2.requires_grad_(False)
     image_encoder.requires_grad_(False)
     unet_encoder.requires_grad_(False)
-    unet.requires_grad_(True)
+
+    if args.train_ip_adapter_only:
+        unet.requires_grad_(False)
+        adapter_modules.requires_grad_(True)
+        unet.encoder_hid_proj.requires_grad_(True)
+        unet.conv_in.requires_grad_(True)
+    else:
+        unet.requires_grad_(True)
 
 
 
 
-    if args.enable_xformers_memory_efficient_attention:
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+    if args.enable_xformers_memory_efficient_attention and not args.low_vram_training:
         if is_xformers_available():
             import xformers
 
             unet.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
+    elif args.enable_xformers_memory_efficient_attention and args.low_vram_training:
+        accelerator.print("[train] skipping xformers attention in low-vram mode to avoid cuDNN initialization issues")
     
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
         unet_encoder.enable_gradient_checkpointing()
     unet.train()
 
-    if args.use_8bit_adam:
+    if args.use_8bit_adam and not args.low_vram_training:
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -419,17 +464,29 @@ def main():
 
         optimizer_class = bnb.optim.AdamW8bit
     else:
+        if args.use_8bit_adam and args.low_vram_training:
+            accelerator.print(
+                "[train] disabling 8-bit Adam in low-vram mode because bitsandbytes requires CUDA parameters"
+            )
         optimizer_class = torch.optim.AdamW
 
-    params_to_opt = itertools.chain(unet.parameters())
+    trainable_params = [p for p in unet.parameters() if p.requires_grad]
+    if len(trainable_params) == 0:
+        raise ValueError("No trainable parameters were found. Check training flags.")
 
 
     optimizer = optimizer_class(
-        params_to_opt,
+        trainable_params,
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
+    )
+
+    total_params = sum(p.numel() for p in unet.parameters())
+    trainable_count = sum(p.numel() for p in trainable_params)
+    accelerator.print(
+        f"[train] trainable params: {trainable_count}/{total_params} ({100.0 * trainable_count / total_params:.2f}%)"
     )
     
     train_dataset = VitonHDDataset(
@@ -443,7 +500,7 @@ def main():
         pin_memory=True,
         shuffle=False,
         batch_size=args.train_batch_size,
-        num_workers=16,
+        num_workers=args.train_num_workers,
     )
     test_dataset = VitonHDDataset(
         dataroot_path=args.data_dir,
@@ -455,7 +512,7 @@ def main():
         test_dataset,
         shuffle=False,
         batch_size=args.test_batch_size,
-        num_workers=4,
+        num_workers=args.test_num_workers,
     )
 
     overrode_max_train_steps = False
@@ -465,7 +522,23 @@ def main():
         overrode_max_train_steps = True
 
 
-    unet,image_proj_model,unet_encoder,image_encoder,optimizer,train_dataloader,test_dataloader = accelerator.prepare(unet, image_proj_model,unet_encoder,image_encoder,optimizer,train_dataloader,test_dataloader)
+    if args.low_vram_training:
+        accelerator.print("[train] keeping the heavy stack on CPU during prepare to reduce initial VRAM spikes")
+        unet = unet.to(device=torch.device("cpu"))
+        image_proj_model = image_proj_model.to(device=torch.device("cpu"))
+        optimizer = optimizer
+        train_dataloader = train_dataloader
+        test_dataloader = test_dataloader
+        unet, image_proj_model, optimizer, train_dataloader, test_dataloader = accelerator.prepare(
+            unet,
+            image_proj_model,
+            optimizer,
+            train_dataloader,
+            test_dataloader,
+            device_placement=[False, False, False, False, False],
+        )
+    else:
+        unet,image_proj_model,unet_encoder,image_encoder,optimizer,train_dataloader,test_dataloader = accelerator.prepare(unet, image_proj_model,unet_encoder,image_encoder,optimizer,train_dataloader,test_dataloader)
     initial_global_step = 0
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -489,7 +562,7 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet), accelerator.accumulate(image_proj_model):
-                if global_step % args.logging_steps == 0:
+                if (not args.low_vram_training) and global_step % args.logging_steps == 0:
                     if accelerator.is_main_process:
                         with torch.no_grad():
                             with torch.cuda.amp.autocast():
@@ -595,13 +668,14 @@ def main():
 
 
 
-                pixel_values = batch["image"].to(dtype=vae.dtype)
+                vae_device = next(vae.parameters()).device
+                pixel_values = batch["image"].to(device=vae_device, dtype=vae.dtype)
                 model_input = vae.encode(pixel_values).latent_dist.sample()
                 model_input = model_input * vae.config.scaling_factor
 
-                masked_latents = vae.encode(
-                    batch["im_mask"].reshape(batch["image"].shape).to(dtype=vae.dtype)
-                ).latent_dist.sample()
+                masked_source = batch["im_mask"].reshape(batch["image"].shape).to(device=vae_device, dtype=vae.dtype)
+
+                masked_latents = vae.encode(masked_source).latent_dist.sample()
                 masked_latents = masked_latents * vae.config.scaling_factor
                 masks = batch["inpaint_mask"]
                 # resize the mask to latents shape as we concatenate the mask to the latents
@@ -612,7 +686,9 @@ def main():
                 )
                 mask = mask.reshape(-1, 1, args.height // 8, args.width // 8)
 
-                pose_map = vae.encode(batch["pose_img"].to(dtype=vae.dtype)).latent_dist.sample()
+                pose_source = batch["pose_img"].to(device=vae_device, dtype=vae.dtype)
+
+                pose_map = vae.encode(pose_source).latent_dist.sample()
                 pose_map = pose_map * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -624,6 +700,24 @@ def main():
                     )
                 # Add noise to the latents according to the noise magnitude at each timestep
                 noisy_latents = noise_scheduler.add_noise(model_input, noise, timesteps)
+
+                if pose_map.shape[-2:] != noisy_latents.shape[-2:]:
+                    pose_map = torch.nn.functional.interpolate(
+                        pose_map,
+                        size=noisy_latents.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+
+                if not args.low_vram_training:
+                    noisy_latents = noisy_latents.to(accelerator.device)
+                    mask = mask.to(accelerator.device)
+                    masked_latents = masked_latents.to(accelerator.device)
+                    pose_map = pose_map.to(accelerator.device)
+                    model_input = model_input.to(accelerator.device)
+                    noise = noise.to(accelerator.device)
+                    timesteps = timesteps.to(accelerator.device)
+
                 latent_model_input = torch.cat([noisy_latents, mask,masked_latents,pose_map], dim=1)
             
             
@@ -642,9 +736,19 @@ def main():
                     return_tensors="pt"
                 ).input_ids
 
-                encoder_output = text_encoder(text_input_ids.to(accelerator.device), output_hidden_states=True)
+                if args.low_vram_training:
+                    text_input_ids_device = text_input_ids
+                else:
+                    text_input_ids_device = text_input_ids.to(accelerator.device)
+
+                encoder_output = text_encoder(text_input_ids_device, output_hidden_states=True)
                 text_embeds = encoder_output.hidden_states[-2]
-                encoder_output_2 = text_encoder_2(text_input_ids_2.to(accelerator.device), output_hidden_states=True)
+                if args.low_vram_training:
+                    text_input_ids_2_device = text_input_ids_2
+                else:
+                    text_input_ids_2_device = text_input_ids_2.to(accelerator.device)
+
+                encoder_output_2 = text_encoder_2(text_input_ids_2_device, output_hidden_states=True)
                 pooled_text_embeds = encoder_output_2[0]
                 text_embeds_2 = encoder_output_2.hidden_states[-2]
                 encoder_hidden_states = torch.concat([text_embeds, text_embeds_2], dim=-1) # concat
@@ -655,7 +759,7 @@ def main():
                     target_size = (args.height, args.height) 
                     add_time_ids = list(original_size + crops_coords_top_left + target_size)
                     add_time_ids = torch.tensor([add_time_ids])
-                    add_time_ids = add_time_ids.to(accelerator.device)
+                    add_time_ids = add_time_ids.to(torch.device("cpu") if args.low_vram_training else accelerator.device)
                     return add_time_ids
                 
                 add_time_ids = torch.cat(
@@ -667,8 +771,32 @@ def main():
                     img_emb_list.append(batch['cloth'][i])
                 
                 image_embeds = torch.cat(img_emb_list,dim=0)
-                image_embeds = image_encoder(image_embeds, output_hidden_states=True).hidden_states[-2]
-                ip_tokens =image_proj_model(image_embeds)
+                if args.low_vram_training:
+                    image_embeds_input = image_embeds.cpu()
+                else:
+                    image_embeds_input = image_embeds.to(accelerator.device)
+
+                image_embeds = image_encoder(image_embeds_input, output_hidden_states=True).hidden_states[-2]
+                if args.low_vram_training:
+                    image_embeds = image_embeds.cpu()
+                    image_embeds = image_embeds.to(dtype=torch.float32)
+                else:
+                    image_embeds = image_embeds.to(accelerator.device)
+                    image_embeds = image_embeds.to(dtype=weight_dtype)
+                ip_tokens = image_proj_model(image_embeds)
+
+                if not args.low_vram_training:
+                    model_input = model_input.to(accelerator.device)
+                    noise = noise.to(accelerator.device)
+                    latent_model_input = latent_model_input.to(accelerator.device)
+                    masked_latents = masked_latents.to(accelerator.device)
+                    mask = mask.to(accelerator.device)
+                    pose_map = pose_map.to(accelerator.device)
+                    timesteps = timesteps.to(accelerator.device)
+                    encoder_hidden_states = encoder_hidden_states.to(accelerator.device)
+                    pooled_text_embeds = pooled_text_embeds.to(accelerator.device)
+                    add_time_ids = add_time_ids.to(accelerator.device)
+                    ip_tokens = ip_tokens.to(accelerator.device)
             
 
 
@@ -676,7 +804,7 @@ def main():
                 unet_added_cond_kwargs = {"text_embeds": pooled_text_embeds, "time_ids": add_time_ids}
                 unet_added_cond_kwargs["image_embeds"] = ip_tokens
 
-                cloth_values = batch["cloth_pure"].to(accelerator.device,dtype=vae.dtype)
+                cloth_values = batch["cloth_pure"].to(device=vae_device, dtype=vae.dtype)
                 cloth_values = vae.encode(cloth_values).latent_dist.sample()
                 cloth_values = cloth_values * vae.config.scaling_factor
 
@@ -697,49 +825,68 @@ def main():
                 ).input_ids
 
             
-                encoder_output = text_encoder(text_input_ids.to(accelerator.device), output_hidden_states=True)
+                if args.low_vram_training:
+                    text_input_ids_cloth_device = text_input_ids
+                else:
+                    text_input_ids_cloth_device = text_input_ids.to(accelerator.device)
+
+                encoder_output = text_encoder(text_input_ids_cloth_device, output_hidden_states=True)
                 text_embeds_cloth = encoder_output.hidden_states[-2]
-                encoder_output_2 = text_encoder_2(text_input_ids_2.to(accelerator.device), output_hidden_states=True)
+                if args.low_vram_training:
+                    text_input_ids_2_cloth_device = text_input_ids_2
+                else:
+                    text_input_ids_2_cloth_device = text_input_ids_2.to(accelerator.device)
+
+                encoder_output_2 = text_encoder_2(text_input_ids_2_cloth_device, output_hidden_states=True)
                 text_embeds_2_cloth = encoder_output_2.hidden_states[-2]
                 text_embeds_cloth = torch.concat([text_embeds_cloth, text_embeds_2_cloth], dim=-1) # concat
+                with accelerator.autocast():
+                    if args.low_vram_training:
+                        timesteps_for_unet_encoder = timesteps.cpu()
+                    else:
+                        timesteps_for_unet_encoder = timesteps
+
+                    down,reference_features = unet_encoder(cloth_values, timesteps_for_unet_encoder, text_embeds_cloth, return_dict=False)
+                    reference_features = list(reference_features)
+
+                    if args.low_vram_training:
+                        cloth_values = cloth_values.to(accelerator.device)
+                        text_embeds_cloth = text_embeds_cloth.to(accelerator.device)
+                        reference_features = [feature.to(accelerator.device) for feature in reference_features]
+
+                    noise_pred = unet(latent_model_input, timesteps, encoder_hidden_states,added_cond_kwargs=unet_added_cond_kwargs,garment_features=reference_features).sample
 
 
-                down,reference_features = unet_encoder(cloth_values,timesteps, text_embeds_cloth,return_dict=False)
-                reference_features = list(reference_features)
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(model_input, noise, timesteps)
+                    elif noise_scheduler.config.prediction_type == "sample":
+                        # We set the target to latents here, but the model_pred will return the noise sample prediction.
+                        target = model_input
+                        # We will have to subtract the noise residual from the prediction to get the target sample.
+                        model_pred = model_pred - noise
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                noise_pred = unet(latent_model_input, timesteps, encoder_hidden_states,added_cond_kwargs=unet_added_cond_kwargs,garment_features=reference_features).sample
+                    
+                    if args.snr_gamma is None:
+                        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+                    else:
+                        # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                        # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                        # This is discussed in Section 4.2 of the same paper.
+                        snr = compute_snr(noise_scheduler, timesteps)
+                        if noise_scheduler.config.prediction_type == "v_prediction":
+                            # Velocity objective requires that we add one to SNR values before we divide by them.
+                            snr = snr + 1
+                        mse_loss_weights = (
+                            torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                        )
 
-
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(model_input, noise, timesteps)
-                elif noise_scheduler.config.prediction_type == "sample":
-                    # We set the target to latents here, but the model_pred will return the noise sample prediction.
-                    target = model_input
-                    # We will have to subtract the noise residual from the prediction to get the target sample.
-                    model_pred = model_pred - noise
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-
-                
-                if args.snr_gamma is None:
-                    loss = F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
-                else:
-                    # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                    # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-                    # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(noise_scheduler, timesteps)
-                    if noise_scheduler.config.prediction_type == "v_prediction":
-                        # Velocity objective requires that we add one to SNR values before we divide by them.
-                        snr = snr + 1
-                    mse_loss_weights = (
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                    )
-
-                    loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
-                    loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
-                    loss = loss.mean()
+                        loss = F.mse_loss(noise_pred.float(), target.float(), reduction="none")
+                        loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                        loss = loss.mean()
 
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
@@ -748,11 +895,19 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
 
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(params_to_opt, 1.0)
+                if accelerator.sync_gradients and args.max_grad_norm > 0:
+                    try:
+                        accelerator.clip_grad_norm_(trainable_params, args.max_grad_norm)
+                    except ValueError as exc:
+                        if "Attempting to unscale FP16 gradients" in str(exc):
+                            accelerator.print(
+                                "[train] skipping gradient clipping because fp16 grad-scaler clipping is not supported in this setup"
+                            )
+                        else:
+                            raise
 
                 optimizer.step()
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 # Load scheduler, tokenizer and models.
                 progress_bar.update(1)
                 global_step += 1

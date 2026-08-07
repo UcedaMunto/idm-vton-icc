@@ -1,0 +1,41 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+
+title Flujo de inferencia Try-on (secuencia)
+
+actor Usuario as U
+participant "UI Gradio" as UI
+participant "Preprocesamiento\n(OpenPose/DensePose/Parsing)" as PRE
+participant "Pipeline SDXL + IP-Adapter" as SDXL
+participant "GPU/CPU Memory Manager" as MEM
+participant "Salida" as OUT
+
+U -> UI : Carga persona + prenda + parametros
+UI -> PRE : Generar pose, parse y mascara agnostica
+PRE --> UI : Tensores/imagenes condicionantes
+
+UI -> SDXL : Ejecutar diffusion steps
+SDXL -> MEM : Reservar VRAM segun resolucion y steps
+MEM --> SDXL : Estado de memoria
+SDXL --> UI : Imagen sintetizada
+UI -> OUT : Guardar/mostrar resultado
+OUT --> U : Try-on final
+
+alt VRAM insuficiente
+  SDXL -> UI : RuntimeError/OOM
+  UI -> MEM : empty_cache + limpieza
+  UI --> U : Mensaje de ajuste sugerido
+else Ejecucion estable
+  UI --> U : Respuesta normal
+end
+
+note over UI,SDXL
+Parametros que mas afectan latencia y memoria:
+- resolucion (width/height)
+- denoising steps
+- guidance scale
+- uso de offload y slicing
+end note
+
+@enduml

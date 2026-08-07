@@ -1,0 +1,50 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+
+left to right direction
+title Mapa de configuraciones y su impacto
+
+package "Variables .env" {
+  rectangle "DATA_DIR" as DATA_DIR
+  rectangle "OUTPUT_DIR" as OUTPUT_DIR
+  rectangle "TRAIN_BATCH_SIZE" as TRAIN_BATCH
+  rectangle "TEST_BATCH_SIZE" as TEST_BATCH
+  rectangle "MIXED_PRECISION" as MP
+  rectangle "LOGGING_STEPS" as LOGS
+  rectangle "CHECKPOINT_EPOCH" as CK_EPOCH
+  rectangle "PYTORCH_CUDA_ALLOC_CONF" as CUDA_ALLOC
+  rectangle "IDMVTON_LOW_RAM" as LOW_RAM
+  rectangle "IDMVTON_CPU_OFFLOAD" as CPU_OFFLOAD
+  rectangle "IDMVTON_FORCE_CPU" as FORCE_CPU
+}
+
+package "Efectos en el sistema" {
+  rectangle "Consumo de VRAM" as VRAM
+  rectangle "Latencia" as LAT
+  rectangle "Estabilidad" as EST
+  rectangle "Calidad visual" as QUAL
+  rectangle "Costo de almacenamiento" as DISK
+}
+
+TRAIN_BATCH --> VRAM : alto impacto
+TEST_BATCH --> VRAM : impacto medio
+MP --> VRAM : reduce consumo
+LOW_RAM --> VRAM : reduce pico
+CPU_OFFLOAD --> VRAM : reduce pico
+FORCE_CPU --> LAT : aumenta mucho
+CUDA_ALLOC --> EST : reduce fragmentacion
+LOGS --> LAT : puede aumentar picos
+CK_EPOCH --> DISK : controla frecuencia
+DATA_DIR --> EST : datos correctos
+OUTPUT_DIR --> DISK : centraliza artefactos
+LOW_RAM --> QUAL : posible perdida fina
+
+note bottom
+Lectura arquitectonica:
+las variables no son solo parametros de IA;
+son knobs de rendimiento, resiliencia operativa
+y costo de infraestructura.
+end note
+
+@enduml

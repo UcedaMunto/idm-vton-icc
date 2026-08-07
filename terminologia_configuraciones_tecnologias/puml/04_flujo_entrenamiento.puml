@@ -1,0 +1,44 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+
+title Flujo de entrenamiento train_xl.py (actividad)
+
+start
+:Activar entorno conda idm;
+:Cargar variables de .env;
+
+if (DATA_DIR y JSON existen?) then (si)
+  :Verificar checkpoints
+  (ip-adapter + image_encoder);
+else (no)
+  :Abortar con error de dataset;
+  stop
+endif
+
+:accelerate launch train_xl.py;
+:Inicializar tokenizer, encoders,
+UNet, VAE, IP-Adapter;
+
+if (Memoria suficiente en accelerator.prepare?) then (si)
+  :Construir DataLoaders train/test;
+  :Loop de entrenamiento;
+  repeat
+    :Forward + perdida;
+    :Backward + optimizer step;
+    if (global_step % logging_steps == 0?) then (si)
+      :Generar muestra de validacion;
+      :Guardar imagen de test;
+    endif
+  repeat while (quedan pasos?) is (si)
+  :Guardar checkpoint segun checkpointing_epoch;
+  :Exportar salida en output_dir;
+  stop
+else (no)
+  :OOM en preparacion;
+  :Reducir batch/resolucion o
+migrar a GPU con mayor VRAM;
+  stop
+endif
+
+@enduml

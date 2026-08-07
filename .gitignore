@@ -35,3 +35,9 @@ tmp_*.py
 .ipynb_checkpoints/
 *.md.env
 dataset/
+
+# Documentation files (keep local, do not version)
+*.md
+!README.md
+!LICENSE.txt
+!LICENSE.md
