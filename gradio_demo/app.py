@@ -6,6 +6,27 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+
+def _load_local_env(repo_root: str) -> None:
+    """Load KEY=VALUE pairs from .env for direct python launches."""
+    env_path = os.path.join(repo_root, ".env")
+    if not os.path.isfile(env_path):
+        return
+
+    with open(env_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            # Keep already-exported vars as highest priority.
+            os.environ.setdefault(key, value)
+
+
+_load_local_env(REPO_ROOT)
+
 from PIL import Image
 import gradio as gr
 from src.tryon_pipeline import StableDiffusionXLInpaintPipeline as TryonPipeline
@@ -62,7 +83,8 @@ def pil_to_binary_mask(pil_image, threshold=0):
     return output_mask
 
 
-base_path = 'yisol/IDM-VTON'
+base_path = os.environ.get("IDMVTON_MODEL_PATH", "yisol/IDM-VTON")
+print(f"[IDM-VTON] loading model from: {base_path}")
 example_path = os.path.join(os.path.dirname(__file__), 'example')
 
 unet = UNet2DConditionModel.from_pretrained(

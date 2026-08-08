@@ -399,7 +399,12 @@ def main():
     torch.nn.init.kaiming_normal_(conv_new.weight)  
     conv_new.weight.data = conv_new.weight.data * 0.  
 
-    conv_new.weight.data[:, :9] = unet.conv_in.weight.data  
+    old_in_channels = unet.conv_in.weight.data.shape[1]
+    if old_in_channels > conv_new.in_channels:
+        raise RuntimeError(
+            f"pretrained UNet has {old_in_channels} input channels, but target conv expects {conv_new.in_channels}"
+        )
+    conv_new.weight.data[:, :old_in_channels] = unet.conv_in.weight.data  
     conv_new.bias.data = unet.conv_in.bias.data  
 
     unet.conv_in = conv_new  # replace conv layer in unet

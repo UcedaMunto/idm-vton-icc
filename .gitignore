@@ -11,6 +11,7 @@ env/
 # Logs and runtime output
 logs/
 *.log
+*.out
 
 # OS/editor junk
 .DS_Store
@@ -24,6 +25,14 @@ Miniconda3-latest-Linux-x86_64.sh
 # Model checkpoints and weights (keep local, do not version)
 ckpt/
 
+# Training outputs and generated checkpoints (keep local)
+output/
+result_*/
+result_train/
+result_train_continue/
+result_train_night/
+result_train_smoke_*/
+
 # Local nested copies / broken gitlinks
 IDM-VTON/
 IP-Adapter/
@@ -35,6 +44,9 @@ tmp_*.py
 .ipynb_checkpoints/
 *.md.env
 dataset/
+
+# Local environment configuration
+.env
 
 # Documentation files (keep local, do not version)
 *.md
