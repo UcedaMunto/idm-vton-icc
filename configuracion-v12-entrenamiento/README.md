@@ -78,6 +78,18 @@ aprendido:
   watchdog (`imagenes_revision/`) y pausar (`PAUSAR_WATCHDOG`) si la perdida
   sube de forma sostenida o la calidad visual empeora.
 
+## Medicion de velocidad real (bloque V12, 2026-08-29)
+
+- Paso 1 (arranque en frio, incluye carga de modelos): 91s.
+- Pasos 2-5 en regimen: ~62-96s (media ~70s/paso), vs los 41-58s/paso medidos
+  por V10. La diferencia se debe a presion de memoria: el sistema tiene
+  31 GiB de RAM y el entrenamiento requiere ~25 GiB RSS; con el swap al 100%
+  (15/15 GiB) los pasos van mas lentos pero estables.
+- Estimacion del bloque de 500 pasos: ~9.7 horas. Si se quiere recuperar
+  velocidad, cerrar aplicaciones con uso alto de RAM (navegadores, IDE) antes de
+  cada bloque; el watchdog comprueba `MIN_AVAILABLE_RAM_GIB` (3 GiB) pero no
+  controla la presion de swap.
+
 ## Pendiente / proximos pasos (protocolo V6, una variable a la vez)
 
 Ver `02_PLAN_RECETA_ENTRENAMIENTO.md`. En orden:
