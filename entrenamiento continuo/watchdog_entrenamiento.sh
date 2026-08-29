@@ -43,9 +43,12 @@ CPU_THREADS="${CPU_THREADS:-12}"
 # V12: continuidad del optimizador entre bloques (usa el optimizer_state.pt que
 # ya se persiste en cada checkpoint). 1=activado, vacio/0=desactivado.
 RESUME_OPTIMIZER_STATE="${RESUME_OPTIMIZER_STATE:-1}"
-# V12: learning rate del fine-tune. Default 1e-5 (mismo que antes; permitir
-# experimentos sin editar el script). Ver configuracion-v12-entrenamiento.
-LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+# V12: learning rate del fine-tune. Default 5e-5 (RECETA V12 PRODUCCION).
+# 1e-5 (default original) mueve los pesos ~0.7% por bloque de 500 pasos y el
+# entrenamiento queda practicamente sin efecto visible (ver configuracion-v12-
+# entrenamiento/01_DIAGNOSTICO_ENTRENAMIENTO_DEBIL.md). 5e-5 es el valor
+# recomendado para fine-tune de solo IP-Adapter con batch 1 en este hardware.
+LEARNING_RATE="${LEARNING_RATE:-5e-5}"
 REVIEW_ROOT="${REVIEW_ROOT:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/imagenes_revision}"
 REVIEW_SAMPLE_LIMIT="${REVIEW_SAMPLE_LIMIT:-2}"
 REVIEW_INFERENCE_STEPS="${REVIEW_INFERENCE_STEPS:-20}"

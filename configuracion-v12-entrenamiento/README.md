@@ -4,10 +4,10 @@ Fecha de creacion: 2026-08-29
 
 ## Estado
 
-`DIAGNOSTICO_COMPLETO_CON_EVIDENCIA`. No se relanza el entrenamiento de produccion
-todavia; primero se corrige la observabilidad (el watchdog no generaba ninguna
-imagen de revision) y luego se aplica el plan de receta de una variable a la vez
-(protocolo V6).
+`IMPLEMENTADA_Y_EN_EJECUCION`. Diagnostico completo con evidencia, correcciones
+aplicadas al watchdog y cadena de produccion relanzada el 2026-08-29 con la
+receta V12 (resume_optimizer + LR 5e-5) desde el checkpoint-100 (1100 pasos
+acumulados).
 
 ## Resumen ejecutivo
 
@@ -58,18 +58,36 @@ aprendido:
   defecto activa) que pasa `--resume_optimizer_state` a `train_xl.py`, usando el
   `optimizer_state.pt` que ya se persistia. Es el unico cambio matematico y
   corresponde al "factor agravante secundario" documentado en V11.
-- `watchdog_entrenamiento.sh`: nueva variable `LEARNING_RATE` (default 1e-5,
-  sin cambio de comportamiento) para permitir experimentos de LR sin editar el
-  script.
+- `watchdog_entrenamiento.sh`: nueva variable `LEARNING_RATE` con **default 5e-5**
+  (RECETA V12 PRODUCCION). La decision de subir de 1e-5 se basa en el
+  diagnostico de `01_DIAGNOSTICO_ENTRENAMIENTO_DEBIL.md`: a 1e-5 el modelo se
+  mueve ~0.7% por bloque de 500 pasos (sin efecto visible); 5e-5 es el valor
+  recomendado para fine-tune de solo IP-Adapter con batch 1.
+
+## Ejecucion de produccion (2026-08-29)
+
+- Reanudada la cadena desde `run_20260825_190501/checkpoint-100`
+  (cumulative_steps=1100) con la receta V12: `--resume_optimizer_state`
+  + `--learning_rate=5e-5`, resto de parametros V10 (Tier1 + float32 +
+  cpu_threads=12, 448x576, 500 pasos por bloque).
+- Validacion previa: smoke test de 1 paso con resume de optimizador confirmo
+  `optimizer state resume enabled`, `cumulative_steps=1101` y checkpoint valido.
+- Meta de pasos acumulados: 5000-10000 (2.3-4.6 dias de encadenamiento del
+  watchdog). Evaluar calidad con el set fijo del plan cuando se alcance.
+- Criterios de parada: revisar las imagenes de revision que ahora genera el
+  watchdog (`imagenes_revision/`) y pausar (`PAUSAR_WATCHDOG`) si la perdida
+  sube de forma sostenida o la calidad visual empeora.
 
 ## Pendiente / proximos pasos (protocolo V6, una variable a la vez)
 
 Ver `02_PLAN_RECETA_ENTRENAMIENTO.md`. En orden:
 
-1. Confirmar la receta base (V12): resume_optimizer + LR 1e-5, correr 1 bloque y
-   medir continuidad (loss no debe volver a subir al inicio del bloque 2).
-2. (Experimento 1) subir LR a 2e-5 o 5e-5; validar con set fijo de parejas
+1. Monitorear la continuidad del primer bloque V12: el `step_loss` debe arrancar
+   donde termino la cadena previa (~0.02-0.04, sin saltos sostenidos) y las
+   imagenes de revision (ahora funcionales) no deben mostrar artefactos nuevos.
+2. Dejar acumular 5000-10000 pasos y validar calidad con el set fijo de parejas
    validas, a resolucion de la app (576x768).
-3. (Experimento 2) si hace falta mas velocidad por paso, probar 384x512.
+3. Si 5e-5 resultara inestable, bajar a 2e-5 y observar (nunca mezclar con otro
+   cambio).
 4. Recien despues evaluar si conviene tocar GarmentNet o cambiar la resolucion de
    la app para alinearla con entrenamiento.

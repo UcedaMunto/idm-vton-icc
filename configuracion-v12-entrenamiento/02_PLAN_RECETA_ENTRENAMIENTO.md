@@ -28,18 +28,22 @@ visual fija antes de promover.
    anterior (~0.02-0.03) y no vuelve a saltar a ~0.04.
 3. Verificar en el log la linea `[train] optimizer state resume enabled`.
 
-## Paso 2: experimento de learning rate (no mezclar con otro cambio)
+**Nota de ejecucion (2026-08-29):** el smoke test de 1 paso previo al lanzamiento
+de produccion confirmo el camino completo (`optimizer state resume enabled`,
+`cumulative_steps=1101`, checkpoint valido), asi que el mecanismo quedo
+validado de punta a punta antes del bloque real.
 
-Opciones a probar, una a la vez, con un bloque de 500 pasos cada una y
-comparando en el set fijo (ver Paso 4):
+## Paso 2: experimento de learning rate (decidido en la receta V12 de produccion)
 
-- A: LR 2e-5 (`LEARNING_RATE=2e-5`)
-- B: LR 5e-5 (`LEARNING_RATE=5e-5`)
+Tras el diagnostico (el modelo se mueve ~0.7% por bloque a 1e-5), la receta de
+produccion se lanzo directamente con **LR 5e-5** + `--resume_optimizer_state`.
+`resume_optimizer_state` es una correccion de continuidad (los `optimizer_state.pt`
+ya se persistian; sin el flag cada bloque reanuda Adam de cero), no un cambio de
+trayectoria; el unico parametro matematico intencional es el LR.
 
-Fundamento: con solo IP-Adapter entrenable (423M params) y batch 1, las
-recetas habituales de fine-tune de IP-Adapter usan LR entre 5e-5 y 1e-4.
-1e-5 mueve los pesos ~0.7% por bloque de 500; 5e-5 deberia moverlos ~3.5x mas.
-No subir de 1e-4 sin observar estabilidad (risk de oscilacion/olvido).
+Si 5e-5 resultara inestable (loss creciendo sostenidamente, artefactos en las
+imagenes de revision), volver a 2e-5 (`LEARNING_RATE=2e-5` en el watchdog) y
+observar. No bajar de 1e-5 salvo que se observe inestabilidad severa.
 
 ## Paso 3: presupuesto de pasos realista
 
