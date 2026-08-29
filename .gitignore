@@ -53,3 +53,6 @@ dataset/
 !README.md
 !LICENSE.txt
 !LICENSE.md
+# Runtime flags del watchdog (no versionar)
+entrenamiento continuo/PAUSAR_WATCHDOG
+entrenamiento continuo/PAUSAR_POR_ERROR
