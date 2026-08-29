@@ -97,6 +97,20 @@ Todos los valores se pueden sobreescribir con variables de entorno (ver el
 encabezado de `watchdog_entrenamiento.sh`), por ejemplo para una prueba manual
 con menos pasos: `MAX_TRAIN_STEPS=1 CHECKPOINTING_STEPS=1 bash watchdog_entrenamiento.sh`.
 
+### V12 (2026-08-29)
+
+- `RESUME_OPTIMIZER_STATE=1` (nuevo, por defecto activado): pasa
+  `--resume_optimizer_state` a `train_xl.py`, cargando el `optimizer_state.pt`
+  (3.2 GiB) que ya se persistia en cada checkpoint. Elimina el reinicio del
+  optimizador entre bloques (factor agravante documentado en V11). Costo extra
+  de RAM ~3.4 GiB al reanudar. Para desactivar: `RESUME_OPTIMIZER_STATE=""`.
+- `LEARNING_RATE=1e-5` (nuevo, default igual que antes): learning rate del
+  fine-tune, para experimentar (ver `configuracion-v12-entrenamiento`) sin
+  editar el script.
+- Correccion de la revision visual: `comparar_calidad_v9.py` se invoca con
+  `PYTHONPATH=<repo>` para que importe `src.*` (antes fallaba siempre con
+  `ModuleNotFoundError: No module named 'src'`).
+
 ## Donde quedan los artefactos
 
 - Log principal watchdog:

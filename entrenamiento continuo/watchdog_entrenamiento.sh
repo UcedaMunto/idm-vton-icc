@@ -40,6 +40,12 @@ HEIGHT="${HEIGHT:-576}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-90}"
 MIN_AVAILABLE_RAM_GIB="${MIN_AVAILABLE_RAM_GIB:-3}"
 CPU_THREADS="${CPU_THREADS:-12}"
+# V12: continuidad del optimizador entre bloques (usa el optimizer_state.pt que
+# ya se persiste en cada checkpoint). 1=activado, vacio/0=desactivado.
+RESUME_OPTIMIZER_STATE="${RESUME_OPTIMIZER_STATE:-1}"
+# V12: learning rate del fine-tune. Default 1e-5 (mismo que antes; permitir
+# experimentos sin editar el script). Ver configuracion-v12-entrenamiento.
+LEARNING_RATE="${LEARNING_RATE:-1e-5}"
 REVIEW_ROOT="${REVIEW_ROOT:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/imagenes_revision}"
 REVIEW_SAMPLE_LIMIT="${REVIEW_SAMPLE_LIMIT:-2}"
 REVIEW_INFERENCE_STEPS="${REVIEW_INFERENCE_STEPS:-20}"
@@ -150,8 +156,10 @@ nohup bash -c '
     --max_train_steps="'"${MAX_TRAIN_STEPS}"'" \
     --checkpointing_steps="'"${CHECKPOINTING_STEPS}"'" \
     --logging_steps="'"${LOGGING_STEPS}"'" \
+    --learning_rate="'"${LEARNING_RATE}"'" \
     --garmentnet_dtype=float32 \
     '"${RESUME_CHECKPOINT:+--resume_from_checkpoint=\"${RESUME_CHECKPOINT}\"}"' \
+    '"${RESUME_OPTIMIZER_STATE:+--resume_optimizer_state}"' \
     > "'"${RUN_LOG}"'" 2>&1
   run_status=$?
 
@@ -179,7 +187,7 @@ nohup bash -c '
     # No bloquea el encadenamiento: si falla, solo se pierde la muestra, no el checkpoint.
     review_dir="'"${REVIEW_ROOT}"'/'"${RUN_ID}"'"
     mkdir -p "${review_dir}"
-    python3 "'"${PROJECT_ROOT}"'/configuracion-v9-entrenamiento/comparar_calidad_v9.py" \
+    PYTHONPATH="'"${PROJECT_ROOT}"'" python3 "'"${PROJECT_ROOT}"'/configuracion-v9-entrenamiento/comparar_calidad_v9.py" \
       --pretrained_model_name_or_path="'"${BASE_CHECKPOINT}"'" \
       --compact_checkpoint="'"${EXPECTED_CHECKPOINT}"'" \
       --data_dir="'"${DATA_DIR}"'" \
