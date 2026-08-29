@@ -2,6 +2,10 @@ import os
 import random
 import argparse
 import json
+import shutil
+import gc
+import time
+from datetime import datetime, timezone
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -249,6 +253,28 @@ class VitonHDDataset(data.Dataset):
         return len(self.im_names)
 
 
+class ResumableShuffleSampler(data.Sampler):
+    """V11 fix: a fixed, seeded shuffle order over the whole dataset, rotated to
+    start at `start_index`. This lets a chain of independent process runs (each
+    resuming only weights/optimizer, never the dataloader position) continue
+    from where the previous run left off instead of silently restarting at
+    sample 0 every time (see configuracion-v11-entrenamiento/01_CAUSA_RAIZ_REPETICION_DATOS.md).
+    """
+
+    def __init__(self, data_source, start_index=0, seed=0):
+        self.num_samples = len(data_source)
+        self.start_index = start_index % self.num_samples if self.num_samples else 0
+        self.seed = seed
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        order = torch.randperm(self.num_samples, generator=generator).tolist()
+        rotated = order[self.start_index:] + order[: self.start_index]
+        return iter(rotated)
+
+    def __len__(self):
+        return self.num_samples
 
 
 def parse_args():
@@ -256,6 +282,11 @@ def parse_args():
     parser.add_argument("--pretrained_model_name_or_path",type=str,default="diffusers/stable-diffusion-xl-1.0-inpainting-0.1",required=False,help="Path to pretrained model or model identifier from huggingface.co/models.",)
     parser.add_argument("--pretrained_garmentnet_path",type=str,default="stabilityai/stable-diffusion-xl-base-1.0",required=False,help="Path to pretrained model or model identifier from huggingface.co/models.",)
     parser.add_argument("--checkpointing_epoch",type=int,default=10,help=("Save a checkpoint of the training state every X updates. These checkpoints are only suitable for resuming"" training using `--resume_from_checkpoint`."),)
+    parser.add_argument("--checkpointing_steps", type=int, default=None, help="Save a checkpoint every X completed optimizer updates. Defaults to checkpointing_epoch for backwards compatibility.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Resume trainable weights and optimizer state from a compact V3 checkpoint.")
+    parser.add_argument("--resume_optimizer_state", action="store_true", help="Also load optimizer state when resuming; this costs several GiB of RAM.")
+    parser.add_argument("--garmentnet_dtype", type=str, default="float32", choices=["float32", "bfloat16", "float16"], help="CPU dtype for the frozen GarmentNet encoder.")
+    parser.add_argument("--full_pipeline_checkpoint", action="store_true", help="Also save a complete inference pipeline at checkpoint intervals. This can require more than 30 GiB RAM.")
     parser.add_argument("--pretrained_ip_adapter_path",type=str,default="ckpt/ip_adapter/ip-adapter-plus_sdxl_vit-h.bin",help="Path to pretrained ip adapter model. If not specified weights are initialized randomly.",)
     parser.add_argument("--image_encoder_path",type=str,default="ckpt/image_encoder",required=False,help="Path to CLIP image encoder",)
     parser.add_argument("--gradient_checkpointing",action="store_true",help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",)
@@ -299,6 +330,37 @@ def parse_args():
         action="store_true",
         help="Train only IP-Adapter layers (attention processors + image proj + conv_in) to reduce VRAM during backward.",
     )
+    parser.add_argument(
+        "--hybrid_small_models_gpu",
+        action="store_true",
+        help=(
+            "V7 Tier 1 (hybrid GPU/CPU): only effective together with --low_vram_training. "
+            "Moves vae, text_encoder, text_encoder_2 and image_encoder to GPU in fp16 to speed up their "
+            "forward pass. GarmentNet (unet_encoder) and the trainable UNet remain on CPU, unchanged. "
+            "Every tensor produced by these models is converted back to CPU float32 immediately after use, "
+            "so the rest of the pipeline is identical to --low_vram_training alone."
+        ),
+    )
+    parser.add_argument(
+        "--profile_step_timing",
+        action="store_true",
+        help=(
+            "V10 diagnostic only: prints wall-clock timing breakdown (per training-step stage) with a "
+            "[profile] prefix. Pure instrumentation, does not change any tensor computation or output."
+        ),
+    )
+    parser.add_argument(
+        "--cpu_threads",
+        type=int,
+        default=0,
+        help=(
+            "V10 fix: overrides torch.set_num_threads() for CPU-bound modules (GarmentNet, trainable UNet, "
+            "and VAE/text/image encoders when running on CPU under --low_vram_training). `accelerate launch` "
+            "sets OMP_NUM_THREADS=1 by default even for a single-process run, which silently limits PyTorch's "
+            "CPU intra-op parallelism to 1 thread regardless of available cores (found via --profile_step_timing). "
+            "0 (default) leaves PyTorch's own thread count untouched, i.e. no behavior change unless set explicitly."
+        ),
+    )
     
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -315,6 +377,10 @@ def main():
 
 
     args = parse_args()
+    if args.checkpointing_steps is None:
+        args.checkpointing_steps = args.checkpointing_epoch
+    if args.checkpointing_steps <= 0:
+        raise ValueError("checkpointing_steps must be greater than zero")
     effective_mixed_precision = args.mixed_precision
     if args.low_vram_training and effective_mixed_precision == "fp16":
         effective_mixed_precision = "no"
@@ -325,6 +391,16 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         project_config=accelerator_project_config,
     )
+
+    if args.cpu_threads > 0:
+        torch.set_num_threads(args.cpu_threads)
+
+    if args.profile_step_timing and accelerator.is_main_process:
+        accelerator.print(
+            f"[profile] torch.get_num_threads()={torch.get_num_threads()} "
+            f"os.cpu_count()={os.cpu_count()} OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')} "
+            f"MKL_NUM_THREADS={os.environ.get('MKL_NUM_THREADS')}"
+        )
 
     if accelerator.is_main_process:
         if args.low_vram_training and args.mixed_precision == "fp16":
@@ -344,6 +420,11 @@ def main():
         if accelerator.is_main_process:
             accelerator.print("[train] using float32 weights in low-vram mode to keep CPU-side modules compatible")
     cpu_dtype = torch.float32
+    garmentnet_dtype = {
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[args.garmentnet_dtype]
 
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",rescale_betas_zero_snr=True)
@@ -352,14 +433,14 @@ def main():
     tokenizer_2 = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2")
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", torch_dtype=cpu_dtype)
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path,subfolder="vae",torch_dtype=cpu_dtype,)
-    unet_encoder = UNet2DConditionModel_ref.from_pretrained(args.pretrained_garmentnet_path, subfolder="unet", torch_dtype=cpu_dtype)
+    unet_encoder = UNet2DConditionModel_ref.from_pretrained(args.pretrained_garmentnet_path, subfolder="unet", torch_dtype=garmentnet_dtype)
     unet_encoder.config.addition_embed_type = None
     unet_encoder.config["addition_embed_type"] = None
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path, torch_dtype=cpu_dtype)
     frozen_device = torch.device("cpu") if args.low_vram_training else accelerator.device
 
     #customize unet start
-    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet",low_cpu_mem_usage=False, device_map=None, torch_dtype=weight_dtype)
+    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet",low_cpu_mem_usage=True, device_map=None, torch_dtype=weight_dtype)
     unet.config.encoder_hid_dim = image_encoder.config.hidden_size
     unet.config.encoder_hid_dim_type = "ip_image_proj"
     unet.config["encoder_hid_dim"] = image_encoder.config.hidden_size
@@ -387,6 +468,9 @@ def main():
 
     image_proj_model.load_state_dict(state_dict["image_proj"], strict=True)
     image_proj_model.requires_grad_(True)
+
+    del state_dict
+    gc.collect()
 
     unet.encoder_hid_proj = image_proj_model
 
@@ -419,6 +503,15 @@ def main():
         text_encoder_2.to(accelerator.device, dtype=weight_dtype)
         image_encoder.to(accelerator.device, dtype=weight_dtype)
         unet_encoder.to(accelerator.device, dtype=weight_dtype)
+    elif args.hybrid_small_models_gpu:
+        accelerator.print(
+            "[train][hybrid-tier1] moving vae/text_encoder/text_encoder_2/image_encoder to GPU in fp16; "
+            "GarmentNet and the trainable UNet remain on CPU"
+        )
+        vae.to(accelerator.device, dtype=torch.float16)
+        text_encoder.to(accelerator.device, dtype=torch.float16)
+        text_encoder_2.to(accelerator.device, dtype=torch.float16)
+        image_encoder.to(accelerator.device, dtype=torch.float16)
 
 
     vae.requires_grad_(False)
@@ -488,6 +581,46 @@ def main():
         eps=args.adam_epsilon,
     )
 
+    resume_cumulative_steps = 0
+    if args.resume_from_checkpoint:
+        weights_path = os.path.join(args.resume_from_checkpoint, "trainable_state.pt")
+        optimizer_path = os.path.join(args.resume_from_checkpoint, "optimizer_state.pt")
+        manifest_path = os.path.join(args.resume_from_checkpoint, "manifest.json")
+        if not os.path.isfile(weights_path):
+            raise FileNotFoundError(f"Compact checkpoint weights not found: {weights_path}")
+
+        compact_state = torch.load(weights_path, map_location="cpu")
+        current_trainable = {name: parameter for name, parameter in unet.named_parameters() if parameter.requires_grad}
+        missing_names = sorted(set(current_trainable) - set(compact_state))
+        unexpected_names = sorted(set(compact_state) - set(current_trainable))
+        if missing_names or unexpected_names:
+            raise RuntimeError(
+                f"Compact checkpoint parameters do not match. Missing={missing_names[:3]}, unexpected={unexpected_names[:3]}"
+            )
+        for name, value in compact_state.items():
+            current_trainable[name].data.copy_(value)
+        del compact_state
+        gc.collect()
+        if args.resume_optimizer_state and os.path.isfile(optimizer_path):
+            optimizer.load_state_dict(torch.load(optimizer_path, map_location="cpu"))
+        accelerator.print(f"[train] resumed trainable weights: {args.resume_from_checkpoint}")
+        if args.resume_optimizer_state:
+            accelerator.print("[train] optimizer state resume enabled")
+
+        # V11 fix: carry the dataset position forward across chained runs (see
+        # configuracion-v11-entrenamiento). Old checkpoints without this field
+        # fall back to 0 (dataset restarts at the beginning, same as before).
+        if os.path.isfile(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                resumed_manifest = json.load(manifest_file)
+            resume_cumulative_steps = int(resumed_manifest.get("cumulative_steps", 0))
+            accelerator.print(f"[train] resumed dataset position: cumulative_steps={resume_cumulative_steps}")
+        else:
+            accelerator.print(
+                "[train] WARNING: resumed checkpoint has no manifest.json; dataset position starts at 0 "
+                "(this checkpoint predates the V11 fix)."
+            )
+
     total_params = sum(p.numel() for p in unet.parameters())
     trainable_count = sum(p.numel() for p in trainable_params)
     accelerator.print(
@@ -500,10 +633,15 @@ def main():
         order="paired",
         size=(args.height, args.width),
     )
+    # V11 fix: previously shuffle=False with no persisted position meant every
+    # resumed run restarted at sample 0, so chained short blocks kept re-training
+    # on the same first N pairs instead of progressing through the dataset.
+    train_sampler = ResumableShuffleSampler(train_dataset, start_index=resume_cumulative_steps, seed=args.seed)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
-        pin_memory=True,
-        shuffle=False,
+        # pinned memory cannot be swapped; avoid it in low-vram mode to reduce OOM risk
+        pin_memory=not args.low_vram_training,
+        sampler=train_sampler,
         batch_size=args.train_batch_size,
         num_workers=args.train_num_workers,
     )
@@ -564,6 +702,86 @@ def main():
     global_step = 0
     first_epoch = 0
     train_loss=0.0
+
+    def save_checkpoint(step):
+        if not accelerator.is_main_process:
+            return
+
+        save_path = os.path.join(args.output_dir, f"checkpoint-{step}")
+        if os.path.exists(save_path):
+            accelerator.print(f"[train] checkpoint already exists, skipping: {save_path}")
+            return
+
+        temporary_path = f"{save_path}.tmp"
+        if os.path.exists(temporary_path):
+            shutil.rmtree(temporary_path)
+        os.makedirs(temporary_path)
+
+        # release any unreferenced tensors before the transient pipeline object is built
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        unwrapped_unet = accelerator.unwrap_model(unet, keep_fp32_wrapper=True)
+        trainable_state = {
+            name: parameter.detach().cpu().clone()
+            for name, parameter in unwrapped_unet.named_parameters()
+            if parameter.requires_grad
+        }
+        optimizer_state = optimizer.state_dict()
+        torch.save(trainable_state, os.path.join(temporary_path, "trainable_state.pt"))
+        torch.save(optimizer_state, os.path.join(temporary_path, "optimizer_state.pt"))
+
+        if args.full_pipeline_checkpoint:
+            pipeline = TryonPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                unet=unwrapped_unet,
+                vae=vae,
+                scheduler=noise_scheduler,
+                tokenizer=tokenizer,
+                tokenizer_2=tokenizer_2,
+                text_encoder=text_encoder,
+                text_encoder_2=text_encoder_2,
+                image_encoder=image_encoder,
+                unet_encoder=unet_encoder,
+                torch_dtype=torch.float16,
+                add_watermarker=False,
+                safety_checker=None,
+            )
+            pipeline.save_pretrained(temporary_path)
+            del pipeline
+
+        del trainable_state, optimizer_state
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        if not os.path.isfile(os.path.join(temporary_path, "trainable_state.pt")):
+            raise RuntimeError(f"Incomplete compact checkpoint: {temporary_path}")
+
+        manifest = {
+            "base_checkpoint": args.pretrained_model_name_or_path,
+            "completed_optimizer_updates": step,
+            "cumulative_steps": resume_cumulative_steps + step,
+            "checkpointing_steps": args.checkpointing_steps,
+            "checkpoint_type": "full_pipeline" if args.full_pipeline_checkpoint else "compact_training_state",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "arguments": vars(args),
+        }
+        with open(os.path.join(temporary_path, "manifest.json"), "w", encoding="utf-8") as manifest_file:
+            json.dump(manifest, manifest_file, indent=2, sort_keys=True)
+
+        os.replace(temporary_path, save_path)
+        accelerator.print(f"[train] checkpoint saved: {save_path}")
+
+    # V10 diagnostic only: no-op unless --profile_step_timing is passed.
+    _prof_state = {"t": None}
+    def _prof_mark(label):
+        if not args.profile_step_timing:
+            return
+        now = time.time()
+        if _prof_state["t"] is not None:
+            accelerator.print(f"[profile] {label}: {now - _prof_state['t']:.2f}s")
+        _prof_state["t"] = now
+
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet), accelerator.accumulate(image_proj_model):
@@ -673,15 +891,22 @@ def main():
 
 
 
+                _prof_mark("step_start")
                 vae_device = next(vae.parameters()).device
                 pixel_values = batch["image"].to(device=vae_device, dtype=vae.dtype)
                 model_input = vae.encode(pixel_values).latent_dist.sample()
                 model_input = model_input * vae.config.scaling_factor
+                if args.low_vram_training:
+                    model_input = model_input.to("cpu", dtype=torch.float32)
+                _prof_mark("vae_model_input")
 
                 masked_source = batch["im_mask"].reshape(batch["image"].shape).to(device=vae_device, dtype=vae.dtype)
 
                 masked_latents = vae.encode(masked_source).latent_dist.sample()
                 masked_latents = masked_latents * vae.config.scaling_factor
+                if args.low_vram_training:
+                    masked_latents = masked_latents.to("cpu", dtype=torch.float32)
+                _prof_mark("vae_masked_latents")
                 masks = batch["inpaint_mask"]
                 # resize the mask to latents shape as we concatenate the mask to the latents
                 mask = torch.stack(
@@ -695,6 +920,9 @@ def main():
 
                 pose_map = vae.encode(pose_source).latent_dist.sample()
                 pose_map = pose_map * vae.config.scaling_factor
+                if args.low_vram_training:
+                    pose_map = pose_map.to("cpu", dtype=torch.float32)
+                _prof_mark("vae_pose_map")
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(model_input)
@@ -742,21 +970,29 @@ def main():
                 ).input_ids
 
                 if args.low_vram_training:
-                    text_input_ids_device = text_input_ids
+                    text_encoder_device = next(text_encoder.parameters()).device
+                    text_input_ids_device = text_input_ids.to(text_encoder_device)
                 else:
                     text_input_ids_device = text_input_ids.to(accelerator.device)
 
                 encoder_output = text_encoder(text_input_ids_device, output_hidden_states=True)
                 text_embeds = encoder_output.hidden_states[-2]
                 if args.low_vram_training:
-                    text_input_ids_2_device = text_input_ids_2
+                    text_embeds = text_embeds.to("cpu", dtype=torch.float32)
+                if args.low_vram_training:
+                    text_encoder_2_device = next(text_encoder_2.parameters()).device
+                    text_input_ids_2_device = text_input_ids_2.to(text_encoder_2_device)
                 else:
                     text_input_ids_2_device = text_input_ids_2.to(accelerator.device)
 
                 encoder_output_2 = text_encoder_2(text_input_ids_2_device, output_hidden_states=True)
                 pooled_text_embeds = encoder_output_2[0]
                 text_embeds_2 = encoder_output_2.hidden_states[-2]
+                if args.low_vram_training:
+                    pooled_text_embeds = pooled_text_embeds.to("cpu", dtype=torch.float32)
+                    text_embeds_2 = text_embeds_2.to("cpu", dtype=torch.float32)
                 encoder_hidden_states = torch.concat([text_embeds, text_embeds_2], dim=-1) # concat
+                _prof_mark("text_encoders_main")
 
 
                 def compute_time_ids(original_size, crops_coords_top_left = (0,0)):
@@ -777,18 +1013,19 @@ def main():
                 
                 image_embeds = torch.cat(img_emb_list,dim=0)
                 if args.low_vram_training:
-                    image_embeds_input = image_embeds.cpu()
+                    image_encoder_device = next(image_encoder.parameters()).device
+                    image_embeds_input = image_embeds.to(image_encoder_device)
                 else:
                     image_embeds_input = image_embeds.to(accelerator.device)
 
                 image_embeds = image_encoder(image_embeds_input, output_hidden_states=True).hidden_states[-2]
                 if args.low_vram_training:
-                    image_embeds = image_embeds.cpu()
-                    image_embeds = image_embeds.to(dtype=torch.float32)
+                    image_embeds = image_embeds.to("cpu", dtype=torch.float32)
                 else:
                     image_embeds = image_embeds.to(accelerator.device)
                     image_embeds = image_embeds.to(dtype=weight_dtype)
                 ip_tokens = image_proj_model(image_embeds)
+                _prof_mark("image_encoder")
 
                 if not args.low_vram_training:
                     model_input = model_input.to(accelerator.device)
@@ -812,6 +1049,9 @@ def main():
                 cloth_values = batch["cloth_pure"].to(device=vae_device, dtype=vae.dtype)
                 cloth_values = vae.encode(cloth_values).latent_dist.sample()
                 cloth_values = cloth_values * vae.config.scaling_factor
+                if args.low_vram_training:
+                    cloth_values = cloth_values.to("cpu", dtype=torch.float32)
+                _prof_mark("vae_cloth")
 
 
                 text_input_ids = tokenizer(
@@ -831,35 +1071,44 @@ def main():
 
             
                 if args.low_vram_training:
-                    text_input_ids_cloth_device = text_input_ids
+                    text_input_ids_cloth_device = text_input_ids.to(text_encoder_device)
                 else:
                     text_input_ids_cloth_device = text_input_ids.to(accelerator.device)
 
                 encoder_output = text_encoder(text_input_ids_cloth_device, output_hidden_states=True)
                 text_embeds_cloth = encoder_output.hidden_states[-2]
                 if args.low_vram_training:
-                    text_input_ids_2_cloth_device = text_input_ids_2
+                    text_embeds_cloth = text_embeds_cloth.to("cpu", dtype=torch.float32)
+                if args.low_vram_training:
+                    text_input_ids_2_cloth_device = text_input_ids_2.to(text_encoder_2_device)
                 else:
                     text_input_ids_2_cloth_device = text_input_ids_2.to(accelerator.device)
 
                 encoder_output_2 = text_encoder_2(text_input_ids_2_cloth_device, output_hidden_states=True)
                 text_embeds_2_cloth = encoder_output_2.hidden_states[-2]
+                if args.low_vram_training:
+                    text_embeds_2_cloth = text_embeds_2_cloth.to("cpu", dtype=torch.float32)
                 text_embeds_cloth = torch.concat([text_embeds_cloth, text_embeds_2_cloth], dim=-1) # concat
+                _prof_mark("text_encoders_cloth")
                 with accelerator.autocast():
                     if args.low_vram_training:
                         timesteps_for_unet_encoder = timesteps.cpu()
                     else:
                         timesteps_for_unet_encoder = timesteps
 
-                    down,reference_features = unet_encoder(cloth_values, timesteps_for_unet_encoder, text_embeds_cloth, return_dict=False)
+                    garmentnet_inputs = cloth_values.to(dtype=garmentnet_dtype)
+                    garmentnet_text = text_embeds_cloth.to(dtype=garmentnet_dtype)
+                    down,reference_features = unet_encoder(garmentnet_inputs, timesteps_for_unet_encoder, garmentnet_text, return_dict=False)
                     reference_features = list(reference_features)
+                    _prof_mark("garmentnet_forward")
 
                     if args.low_vram_training:
                         cloth_values = cloth_values.to(accelerator.device)
                         text_embeds_cloth = text_embeds_cloth.to(accelerator.device)
-                        reference_features = [feature.to(accelerator.device) for feature in reference_features]
+                        reference_features = [feature.to(accelerator.device, dtype=weight_dtype) for feature in reference_features]
 
                     noise_pred = unet(latent_model_input, timesteps, encoder_hidden_states,added_cond_kwargs=unet_added_cond_kwargs,garment_features=reference_features).sample
+                    _prof_mark("unet_forward")
 
 
                     if noise_scheduler.config.prediction_type == "epsilon":
@@ -899,58 +1148,36 @@ def main():
                 
                 # Backpropagate
                 accelerator.backward(loss)
+                _prof_mark("backward")
 
-                if accelerator.sync_gradients and args.max_grad_norm > 0:
-                    try:
-                        accelerator.clip_grad_norm_(trainable_params, args.max_grad_norm)
-                    except ValueError as exc:
-                        if "Attempting to unscale FP16 gradients" in str(exc):
-                            accelerator.print(
-                                "[train] skipping gradient clipping because fp16 grad-scaler clipping is not supported in this setup"
-                            )
-                        else:
-                            raise
+                if accelerator.sync_gradients:
+                    if args.max_grad_norm > 0:
+                        try:
+                            accelerator.clip_grad_norm_(trainable_params, args.max_grad_norm)
+                        except ValueError as exc:
+                            if "Attempting to unscale FP16 gradients" in str(exc):
+                                accelerator.print(
+                                    "[train] skipping gradient clipping because fp16 grad-scaler clipping is not supported in this setup"
+                                )
+                            else:
+                                raise
 
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                # Load scheduler, tokenizer and models.
-                progress_bar.update(1)
-                global_step += 1
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    _prof_mark("optimizer_step")
+                    progress_bar.update(1)
+                    global_step += 1
             if accelerator.sync_gradients:
-                progress_bar.update(1)
-                global_step += 1
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
+                if global_step % args.checkpointing_steps == 0:
+                    save_checkpoint(global_step)
+                accelerator.wait_for_everyone()
             logs = {"step_loss": loss.detach().item()}
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
-
-        if global_step % args.checkpointing_epoch == 0:
-            if accelerator.is_main_process:
-                # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                unwrapped_unet = accelerator.unwrap_model(
-                    unet, keep_fp32_wrapper=True
-                )
-                pipeline = TryonPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
-                    unet=unwrapped_unet,
-                    vae= vae,
-                    scheduler=noise_scheduler,
-                    tokenizer=tokenizer,
-                    tokenizer_2=tokenizer_2,
-                    text_encoder=text_encoder,
-                    text_encoder_2=text_encoder_2,
-                    image_encoder=image_encoder,
-                    unet_encoder=unet_encoder,
-                    torch_dtype=torch.float16,
-                    add_watermarker=False,
-                    safety_checker=None,
-                )
-                save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                pipeline.save_pretrained(save_path)
-                del pipeline
 
                 
 if __name__ == "__main__":

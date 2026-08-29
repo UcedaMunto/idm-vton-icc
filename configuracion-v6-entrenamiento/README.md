@@ -41,6 +41,7 @@ No se incluye `config_v6.env`, launcher ni interfaz ejecutable para impedir una 
 6. [06_TRAZABILIDAD_Y_EVIDENCIAS.md](06_TRAZABILIDAD_Y_EVIDENCIAS.md): inventario, hashes y comandos reproducibles.
 7. [07_DECISIONES_Y_EJECUCION.md](07_DECISIONES_Y_EJECUCION.md): registro de las 4 recomendaciones adoptadas y de la detencion ordenada del entrenamiento ejecutada el 2026-08-22.
 8. [08_PRIMERAS_PRUEBAS_V6.md](08_PRIMERAS_PRUEBAS_V6.md): primera validacion estatica V6 (sin GPU) y siguiente paso pendiente de confirmacion.
+9. [09_INVESTIGACION_RAM_Y_CORRECCION.md](09_INVESTIGACION_RAM_Y_CORRECCION.md): causa raiz medida del fallo por RAM (F-21) y parche propuesto (~13.6 GiB de ahorro estimado), pendiente de aprobacion para aplicar.
 
 ## Artefactos ejecutables (solo validacion, no entrenamiento)
 
