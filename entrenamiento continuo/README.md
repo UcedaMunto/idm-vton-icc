@@ -104,9 +104,10 @@ con menos pasos: `MAX_TRAIN_STEPS=1 CHECKPOINTING_STEPS=1 bash watchdog_entrenam
   (3.2 GiB) que ya se persistia en cada checkpoint. Elimina el reinicio del
   optimizador entre bloques (factor agravante documentado en V11). Costo extra
   de RAM ~3.4 GiB al reanudar. Para desactivar: `RESUME_OPTIMIZER_STATE=""`.
-- `LEARNING_RATE=1e-5` (nuevo, default igual que antes): learning rate del
-  fine-tune, para experimentar (ver `configuracion-v12-entrenamiento`) sin
-  editar el script.
+- `LEARNING_RATE=5e-5` (nuevo, default V12 produccion): learning rate del
+  fine-tune. 1e-5 (default original) no movia el modelo (~0.7% de deriva por
+  bloque de 500 pasos); 5e-5 es la receta recomendada para solo IP-Adapter con
+  batch 1 en este hardware (ver `configuracion-v12-entrenamiento`).
 - Correccion de la revision visual: `comparar_calidad_v9.py` se invoca con
   `PYTHONPATH=<repo>` para que importe `src.*` (antes fallaba siempre con
   `ModuleNotFoundError: No module named 'src'`).
