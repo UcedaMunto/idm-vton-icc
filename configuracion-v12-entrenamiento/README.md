@@ -90,16 +90,32 @@ aprendido:
   cada bloque; el watchdog comprueba `MIN_AVAILABLE_RAM_GIB` (3 GiB) pero no
   controla la presion de swap.
 
-## Pendiente / proximos pasos (protocolo V6, una variable a la vez)
+## Pruebas con resultados iniciales (sin esperar al modelo final)
 
-Ver `02_PLAN_RECETA_ENTRENAMIENTO.md`. En orden:
+El entrenamiento NO se detiene solo: el watchdog encadena bloques de 500 pasos
+indefinidamente. Para probar resultados iniciales:
 
-1. Monitorear la continuidad del primer bloque V12: el `step_loss` debe arrancar
-   donde termino la cadena previa (~0.02-0.04, sin saltos sostenidos) y las
-   imagenes de revision (ahora funcionales) no deben mostrar artefactos nuevos.
-2. Dejar acumular 5000-10000 pasos y validar calidad con el set fijo de parejas
-   validas, a resolucion de la app (576x768).
-3. Si 5e-5 resultara inestable, bajar a 2e-5 y observar (nunca mezclar con otro
-   cambio).
-4. Recien despues evaluar si conviene tocar GarmentNet o cambiar la resolucion de
-   la app para alinearla con entrenamiento.
+1. **Preservacion automatica de checkpoints**: el cron de `preservar_checkpoints_pruebas.sh`
+   (cada 5 min) copia `trainable_state.pt + manifest.json` de cada checkpoint de
+   la corrida activa a `result_train_v10/pruebas_checkpoints/run_*/checkpoint-*`
+   ANTES de que el watchdog los borre al terminar el bloque. Desinstalar:
+   borrar la linea `preservar_checkpoints_pruebas.sh` del `crontab -l`.
+2. **Exportar un checkpoint para la app** (toma ~10 min, usa RAM): 
+   `bash configuracion-v12-entrenamiento/exportar_prueba.sh <dir_checkpoint>` y
+   apuntar `IDMVTON_MODEL_PATH` del `.env` a la carpeta generada, reiniciar la app.
+3. **Comparar sin tocar la app**: 
+   `PYTHONPATH=$PWD python3 configuracion-v9-entrenamiento/comparar_calidad_v9.py
+   --pretrained_model_name_or_path=result_train_night/checkpoint-250
+   --compact_checkpoint=<dir_checkpoint> --data_dir=dataset/DATA_DIR_PREP
+   --output_dir=result_train_v10/demos/comparacion --width=576 --height=768`.
+
+### Hitos esperados (bloque 1 V12, 500 pasos a ~45-70s/paso)
+
+| Checkpoint | Cumulative | Hora estimada | Deriva de pesos esperada |
+|---|---:|---:|---:|
+| checkpoint-100 | 1200 | ~11:10 | ~0.7% (sutil) |
+| checkpoint-300 | 1400 | ~14:00 | ~2% |
+| checkpoint-500 (fin del bloque) | 1600 | ~16:30-18:00 | ~3.4% (primera version claramente comprobable) |
+| despues de 2 bloques | 2100 | ~22:30-02:00 | ~7% |
+
+Para pausar cuando se quiera evaluar: `touch "entrenamiento continuo/PAUSAR_WATCHDOG"`.
