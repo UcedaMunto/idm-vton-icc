@@ -119,3 +119,47 @@ indefinidamente. Para probar resultados iniciales:
 | despues de 2 bloques | 2100 | ~22:30-02:00 | ~7% |
 
 Para pausar cuando se quiera evaluar: `touch "entrenamiento continuo/PAUSAR_WATCHDOG"`.
+
+## Decision tras la primera prueba con la app (2026-08-29)
+
+El usuario probo la app con el checkpoint cumulative 1800 y reporto que "el
+error persiste" (la prenda de salida sigue sin parecerse a la de entrada).
+
+Deduccion clave: el modelo 1800 difiere solo 0.3-0.6% del modelo anterior (1100),
+que a su vez era ~base. Por lo tanto, si con el modelo 1800 "el error persiste",
+**el modelo base ya tenia ese comportamiento con esas entradas**. No es un
+defecto introducido por el entrenamiento, ni algo que "mas pasos" de la receta
+actual (IP-Adapter-only, GarmentNet congelado) vaya a cambiar radicalmente.
+
+### Experimentos para confirmar el origen (en orden de costo)
+
+1. **Probar la base directamente en la app** (1 min, costo cero): poner
+   `IDMVTON_MODEL_PATH=/home/uceda/Documents/IDM-VTON/result_train_night/checkpoint-250`
+   en `.env`, reiniciar la app, misma prenda de entrada.
+   - Si la salida es igual a la del 1800 -> el error es del modelo base con ese
+     dominio de entrada (desajuste de dominio o condicionamiento), no falta de
+     entrenamiento.
+   - Si la salida cambia -> el entrenamiento SI esta moviendo el comportamiento
+     y "mas pasos" es un camino valido.
+2. **A/B controlado con pares validos del dataset** (cerrar la app, ~10 min):
+   `comparar_calidad_v9.py` base vs 1800 sobre un par valido (p.ej. 048393_0,
+   cuya prenda SI es una prenda aislada; 048392_0 NO es valido: su "prenda" es
+   una foto de persona).
+3. **Preprocesar la prenda de entrada** (sin entrenar): si las fotos reales
+   traen fondo/percha/dobladuras, aislar la prenda y poner fondo blanco antes de
+   subirla. El modelo fue entrenado con prendas aisladas en fondo blanco.
+
+### Caminos segun el resultado
+
+- Si el error persiste incluso con prendas aisladas de catalogo -> el problema
+  es de receta/condicionamiento; evaluar (a) incluir GarmentNet en el
+  entrenamiento, (b) LoRA sobre el UNet completo, o (c) dataset custom con las
+  prendas del usuario (adaptacion de dominio).
+- Si el error aparece solo con fotos reales con fondo -> atacar el dominio:
+  preprocesado de prenda y/o dataset custom con las fotos reales del usuario.
+- Si la salida cambia entre base y 1800 -> seguir acumulando pasos y reevaluar
+  en 5000-10000.
+
+Estado actual: entrenamiento DETENIDO (watchdog pausado), app corriendo con el
+checkpoint 1800.
+
