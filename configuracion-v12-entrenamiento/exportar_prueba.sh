@@ -10,6 +10,8 @@ set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/home/uceda/Documents/IDM-VTON}"
 BASE_CHECKPOINT="${BASE_CHECKPOINT:-${PROJECT_ROOT}/result_train_night/checkpoint-250}"
+# Python del entorno conda "idm" (el unico con diffusers/torch instalados).
+CONDA_PYTHON="${CONDA_PYTHON:-/home/uceda/miniconda3/envs/idm/bin/python}"
 CKPT="${1:?Uso: exportar_prueba.sh <dir_checkpoint> [nombre_salida]}"
 NAME="${2:-prueba_$(date '+%Y%m%d_%H%M%S')}"
 OUT="${PROJECT_ROOT}/result_train_v10/demos/${NAME}"
@@ -20,9 +22,9 @@ if [[ ! -f "${CKPT}/manifest.json" || ! -f "${CKPT}/trainable_state.pt" ]]; then
 fi
 
 echo "Cumulative steps del checkpoint:"
-python3 -c "import json,sys; d=json.load(open('${CKPT}/manifest.json')); print(' ', d.get('cumulative_steps'), 'pasos acumulados')"
+"${CONDA_PYTHON}" -c "import json,sys; d=json.load(open('${CKPT}/manifest.json')); print(' ', d.get('cumulative_steps'), 'pasos acumulados')"
 
-python3 "${PROJECT_ROOT}/exportar_checkpoint_para_demo.py" \
+PYTHONPATH="${PROJECT_ROOT}" "${CONDA_PYTHON}" "${PROJECT_ROOT}/exportar_checkpoint_para_demo.py" \
   --base_checkpoint "${BASE_CHECKPOINT}" \
   --compact_checkpoint "${CKPT}" \
   --output_dir "${OUT}"
