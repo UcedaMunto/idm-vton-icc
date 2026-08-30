@@ -38,6 +38,11 @@ class VitonHDDataset(data.Dataset):
         phase: Literal["train", "test"],
         order: Literal["paired", "unpaired"] = "paired",
         size: Tuple[int, int] = (512, 384),
+        cj_brightness: float = 0.2,
+        cj_contrast: float = 0.2,
+        cj_saturation: float = 0.2,
+        cj_hue: float = 0.1,
+        cj_prob: float = 0.5,
     ):
         super(VitonHDDataset, self).__init__()
         self.dataroot = dataroot_path
@@ -45,6 +50,13 @@ class VitonHDDataset(data.Dataset):
         self.height = size[0]
         self.width = size[1]
         self.size = size
+        # V13: augmentacion de color configurable (por defecto MAS SUAVE que el
+        # original hue=0.5 -> hue=0.1, para no ensenar invariancia al color).
+        self.cj_brightness = cj_brightness
+        self.cj_contrast = cj_contrast
+        self.cj_saturation = cj_saturation
+        self.cj_hue = cj_hue
+        self.cj_prob = cj_prob
 
 
         self.norm = transforms.Normalize([0.5], [0.5])
@@ -96,10 +108,12 @@ class VitonHDDataset(data.Dataset):
         dataroot_names = []
 
 
-        if phase == "train":
-            filename = os.path.join(dataroot_path, f"{phase}_pairs.txt")
-        else:
-            filename = os.path.join(dataroot_path, f"{phase}_pairs.txt")
+        # V13: preferir la lista de pares limpios si existe (generada aparte,
+        # solo texto; no modifica las imagenes del dataset).
+        filename = os.path.join(dataroot_path, f"{phase}_pairs.txt")
+        clean_filename = os.path.join(dataroot_path, f"{phase}_pairs_clean.txt")
+        if os.path.isfile(clean_filename):
+            filename = clean_filename
 
         with open(filename, "r") as f:
             for line in f.readlines():
@@ -161,8 +175,8 @@ class VitonHDDataset(data.Dataset):
 
 
 
-            if random.random()>0.5:
-                color_jitter = transforms.ColorJitter(brightness=0.5, contrast=0.3, saturation=0.5, hue=0.5)
+            if random.random() < self.cj_prob:
+                color_jitter = transforms.ColorJitter(brightness=self.cj_brightness, contrast=self.cj_contrast, saturation=self.cj_saturation, hue=self.cj_hue)
                 fn_idx, b, c, s, h = transforms.ColorJitter.get_params(color_jitter.brightness, color_jitter.contrast, color_jitter.saturation,color_jitter.hue)
                 
                 image = TF.adjust_contrast(image, c)
@@ -323,6 +337,15 @@ def parse_args():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--data_dir", type=str, default="/home/omnious/workspace/yisol/Dataset/VITON-HD/zalando", help="For distributed training: local_rank")
     parser.add_argument("--train_num_workers", type=int, default=8, help="Number of dataloader workers for training.")
+    parser.add_argument("--test_num_workers", type=int, default=2, help="Number of dataloader workers for testing.")
+    # V13: augmentacion de color configurable. Por defecto MAS SUAVE que el
+    # original (hue=0.5, sat/cont/bright=0.5/0.3/0.5) para reducir la invariancia
+    # al color que colabora al desplazamiento de color.
+    parser.add_argument("--color_jitter_prob", type=float, default=0.5, help="Probabilidad de aplicar color jitter (0=off).")
+    parser.add_argument("--color_jitter_brightness", type=float, default=0.2)
+    parser.add_argument("--color_jitter_contrast", type=float, default=0.2)
+    parser.add_argument("--color_jitter_saturation", type=float, default=0.2)
+    parser.add_argument("--color_jitter_hue", type=float, default=0.1)
     parser.add_argument("--test_num_workers", type=int, default=2, help="Number of dataloader workers for testing.")
     parser.add_argument("--low_vram_training", action="store_true", help="Keep frozen modules on CPU and move only the tensors needed for the trainable UNet to GPU.")
     parser.add_argument(
@@ -632,6 +655,11 @@ def main():
         phase="train",
         order="paired",
         size=(args.height, args.width),
+        cj_brightness=args.color_jitter_brightness,
+        cj_contrast=args.color_jitter_contrast,
+        cj_saturation=args.color_jitter_saturation,
+        cj_hue=args.color_jitter_hue,
+        cj_prob=args.color_jitter_prob,
     )
     # V11 fix: previously shuffle=False with no persisted position meant every
     # resumed run restarted at sample 0, so chained short blocks kept re-training
@@ -650,6 +678,11 @@ def main():
         phase="test",
         order="paired",
         size=(args.height, args.width),
+        cj_brightness=args.color_jitter_brightness,
+        cj_contrast=args.color_jitter_contrast,
+        cj_saturation=args.color_jitter_saturation,
+        cj_hue=args.color_jitter_hue,
+        cj_prob=args.color_jitter_prob,
     )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,

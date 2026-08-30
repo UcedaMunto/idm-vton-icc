@@ -19,10 +19,12 @@ IP_ADAPTER_PATH="${IP_ADAPTER_PATH:-ckpt/ip_adapter/ip-adapter-plus_sdxl_vit-h.b
 IMAGE_ENCODER_PATH="${IMAGE_ENCODER_PATH:-ckpt/image_encoder}"
 
 BASE_CHECKPOINT="${BASE_CHECKPOINT:-/home/uceda/Documents/IDM-VTON/result_train_night/checkpoint-250}"
-COMPACT_CHECKPOINT_ROOT="${COMPACT_CHECKPOINT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v10/produccion_continua}"
+# V13: cadena NUEVA desde cero (carpeta de resultados distinta a V10). El find de
+# resume no encontrara nada ahi -> arranca desde BASE_CHECKPOINT (cumulative 0).
+COMPACT_CHECKPOINT_ROOT="${COMPACT_CHECKPOINT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v13/produccion_continua}"
 
-AUTO_OUTPUT_ROOT="${AUTO_OUTPUT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v10/produccion_continua}"
-LOG_ROOT="${LOG_ROOT:-/home/uceda/Documents/IDM-VTON/logs/produccion_continua}"
+AUTO_OUTPUT_ROOT="${AUTO_OUTPUT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v13/produccion_continua}"
+LOG_ROOT="${LOG_ROOT:-/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v13}"
 WATCHDOG_LOG="${WATCHDOG_LOG:-${LOG_ROOT}/watchdog.log}"
 LOCK_FILE="${LOCK_FILE:-${LOG_ROOT}/watchdog.lock}"
 PAUSE_FILE="${PAUSE_FILE:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/PAUSAR_WATCHDOG}"
@@ -43,12 +45,9 @@ CPU_THREADS="${CPU_THREADS:-12}"
 # V12: continuidad del optimizador entre bloques (usa el optimizer_state.pt que
 # ya se persiste en cada checkpoint). 1=activado, vacio/0=desactivado.
 RESUME_OPTIMIZER_STATE="${RESUME_OPTIMIZER_STATE:-1}"
-# V12: learning rate del fine-tune. Default 5e-5 (RECETA V12 PRODUCCION).
-# 1e-5 (default original) mueve los pesos ~0.7% por bloque de 500 pasos y el
-# entrenamiento queda practicamente sin efecto visible (ver configuracion-v12-
-# entrenamiento/01_DIAGNOSTICO_ENTRENAMIENTO_DEBIL.md). 5e-5 es el valor
-# recomendado para fine-tune de solo IP-Adapter con batch 1 en este hardware.
-LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+# V13: learning rate moderado a 2e-5 (mas seguro que 5e-5; ver configuracion-
+# v12-entrenamiento/01 y v13/02). A 1e-5 el modelo casi no se movia; 5e-5 era riesgo.
+LEARNING_RATE="${LEARNING_RATE:-2e-5}"
 REVIEW_ROOT="${REVIEW_ROOT:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/imagenes_revision}"
 REVIEW_SAMPLE_LIMIT="${REVIEW_SAMPLE_LIMIT:-2}"
 REVIEW_INFERENCE_STEPS="${REVIEW_INFERENCE_STEPS:-20}"

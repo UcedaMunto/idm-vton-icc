@@ -39,6 +39,32 @@ Lo que SI se confirmo con evidencia:
    uniformes), pero la deteccion automatica por BRILLO es **incorrecta** porque
    descarta prendas blancas/claras validas (ver 03).
 
+## Implementacion de V13 (2026-08-29)
+
+Cambios aplicados para el re-entrenamiento desde cero:
+
+1. **Augmentacion de color reducida** (`train_xl.py`): `ColorJitter` ahora es
+   configurable por argumentos y por defecto mas suave:
+   `--color_jitter_prob=0.5 --color_jitter_brightness=0.2
+   --color_jitter_contrast=0.2 --color_jitter_saturation=0.2
+   --color_jitter_hue=0.1` (antes hue=0.5 = +-180 grados). Reduce la invariancia
+   al color que colabora al desplazamiento de color.
+2. **Learning rate moderado** (`watchdog_entrenamiento.sh`): `LEARNING_RATE` por
+   defecto **2e-5** (antes 5e-5; 1e-5 no movia el modelo).
+3. **Dataset limpio** (`generar_pares_limpios.py` + `VitonHDDataset`): el loader
+   usa `{phase}_pairs_clean.txt` si existe. Solo descarta prendas
+   inequivocamente malas (foto de persona por piel + imagen uniforme sin bordes);
+   conserva prendas blancas/claras (tienen bordes/silueta). NO modifica imagenes.
+4. **Cadena desde cero**: `watchdog_entrenamiento.sh` apunta a
+   `result_train_v13/produccion_continua` (nuevo) y `logs/produccion_continua_v13`.
+   Como la carpeta esta vacia, el find de resume no encuentra nada y arranca desde
+   `result_train_night/checkpoint-250` (cumulative 0). La cadena V10 (1800) queda
+   intacta y preservada.
+5. `preservar_checkpoints_pruebas.sh` ahora sigue la cadena V13.
+
+> Nota: el A/B diagnostico base-vs-1800 sigue pendiente; el entrenamiento V13 se
+> lanza con la receta corregida para observar si mejora el comportamiento.
+
 ## Documentos
 
 1. [01_HALLAZGOS_CON_EVIDENCIA.md](01_HALLAZGOS_CON_EVIDENCIA.md): todos los

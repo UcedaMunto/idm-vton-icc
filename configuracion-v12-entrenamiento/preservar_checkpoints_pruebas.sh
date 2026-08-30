@@ -12,7 +12,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/home/uceda/Documents/IDM-VTON}"
-COMPACT_ROOT="${COMPACT_ROOT:-${PROJECT_ROOT}/result_train_v10/produccion_continua}"
+COMPACT_ROOT="${COMPACT_ROOT:-${PROJECT_ROOT}/result_train_v13/produccion_continua}"
 PRESERVED_ROOT="${PRESERVED_ROOT:-${PROJECT_ROOT}/result_train_v10/pruebas_checkpoints}"
 
 mkdir -p "${PRESERVED_ROOT}"
