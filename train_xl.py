@@ -346,7 +346,6 @@ def parse_args():
     parser.add_argument("--color_jitter_contrast", type=float, default=0.2)
     parser.add_argument("--color_jitter_saturation", type=float, default=0.2)
     parser.add_argument("--color_jitter_hue", type=float, default=0.1)
-    parser.add_argument("--test_num_workers", type=int, default=2, help="Number of dataloader workers for testing.")
     parser.add_argument("--low_vram_training", action="store_true", help="Keep frozen modules on CPU and move only the tensors needed for the trainable UNet to GPU.")
     parser.add_argument(
         "--train_ip_adapter_only",
