@@ -56,3 +56,6 @@ dataset/
 # Runtime flags del watchdog (no versionar)
 entrenamiento continuo/PAUSAR_WATCHDOG
 entrenamiento continuo/PAUSAR_POR_ERROR
+
+# Imagenes de revision generadas por el watchdog
+entrenamiento continuo/imagenes_revision/
