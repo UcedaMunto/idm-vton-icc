@@ -62,8 +62,40 @@ Cambios aplicados para el re-entrenamiento desde cero:
    intacta y preservada.
 5. `preservar_checkpoints_pruebas.sh` ahora sigue la cadena V13.
 
-> Nota: el A/B diagnostico base-vs-1800 sigue pendiente; el entrenamiento V13 se
-> lanza con la receta corregida para observar si mejora el comportamiento.
+## Estado del entrenamiento V13 (2026-08-29)
+
+- **En ejecucion**: cadena nueva en `result_train_v13/produccion_continua` +
+  `logs/produccion_continua_v13`. Arranco desde `result_train_night/checkpoint-250`
+  (resume=ninguno, cumulative 0) con la receta V13: dataset limpio (11349 pares
+  train), augmentacion de color reducida (hue=0.1) y LR 2e-5. Bloque de 500 pasos
+  (checkpoint cada 100).
+- **Predictivo**: validado con smoke test de 1 paso (step_loss OK, lr=2e-5,
+  hue=0.1 en el manifest). Sin errores al arrancar.
+
+## Limpieza de disco (autorizada por el usuario, 2026-08-29)
+
+El watchdog bloqueaba por `MIN_FREE_GIB=90` (solo 79 GiB libres). Para liberar
+espacio sin perder lo importante, se borraron checkpoints REDUNDANTES de
+entrenamientos anteriores (sus `trainable_state` ya estan preservados en
+`result_train_v10/pruebas_checkpoints`, y el modelo demo 1800 ya esta exportado):
+
+- Se ELIMINO en `result_train_v10/produccion_continua`:
+  - `checkpoint_1100_para_demo` (modelo viejo, sustituido por el demo 1800).
+  - `run_20260825_073101`, `run_20260825_131801`, `run_20260825_190501`
+    (cadena V10; su trainable_state esta preservado).
+  - `run_20260829_094044`, `run_20260829_155002` (cadena V12).
+- Se CONSERVÓ:
+  - `result_train_night/checkpoint-250` (base de entrenamiento y export).
+  - `result_train_v10/demos/prueba_cumulative_1800` (modelo actual de prueba).
+  - `result_train_v10/pruebas_checkpoints` (7 checkpoints 1200-1800 para pruebas).
+  - `dataset/` intacto (no se modifico ninguna imagen; solo se genero
+    `*_pairs_clean.txt`).
+- Disco: de 79 GiB libres a **119 GiB libres** (pasa el chequeo de 90 GiB).
+
+> Nota: al borrar los `run_*` de V10/V12 se perdió el `optimizer_state.pt` de esa
+> cadena (solo servía para continuarla). Como V13 arranca desde cero, no se
+> necesitaba. El modelo 1800 y sus pesos entrenables (para exportar/probar)
+> siguen disponibles en `demos/prueba_cumulative_1800` y `pruebas_checkpoints`.
 
 ## Documentos
 
