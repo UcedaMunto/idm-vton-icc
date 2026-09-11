@@ -59,3 +59,7 @@ entrenamiento continuo/PAUSAR_POR_ERROR
 
 # Imagenes de revision generadas por el watchdog
 entrenamiento continuo/imagenes_revision/
+
+# Respaldos locales de pesos (hardlinks de varios GiB). Los manifiestos con sha256
+# quedan documentados en configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md
+backups/
