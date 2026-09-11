@@ -352,6 +352,18 @@ def parse_args():
         action="store_true",
         help="Train only IP-Adapter layers (attention processors + image proj + conv_in) to reduce VRAM during backward.",
     )
+    # V14 (2026-09-10): receta C2 del doc 04 de configuracion-v14-entrenamiento ->
+    # entrenar TAMBIEN el GarmentNet (unet_encoder, ~2,6B parametros), que es quien
+    # aporta textura y geometria de la prenda y hasta ahora estaba congelado.
+    # Es ortogonal a --train_ip_adapter_only: la receta C2 usa AMBOS flags (IP-Adapter
+    # + GarmentNet, con el UNet congelado).
+    # OJO: entrenar el GarmentNet exige tenerlo en GPU (no en CPU) y su coste de
+    # memoria es alto; ver 10_PLAN_IMPLEMENTACION_V14.md antes de usarlo.
+    parser.add_argument(
+        "--train_garmentnet",
+        action="store_true",
+        help="V14: also train the GarmentNet encoder (unet_encoder). Combine with --train_ip_adapter_only for recipe C2.",
+    )
     parser.add_argument(
         "--hybrid_small_models_gpu",
         action="store_true",
@@ -535,12 +547,23 @@ def main():
         text_encoder_2.to(accelerator.device, dtype=torch.float16)
         image_encoder.to(accelerator.device, dtype=torch.float16)
 
+    # V14: si el GarmentNet se va a entrenar no puede quedarse en CPU (un backward de
+    # 2,6B parametros en CPU haria inutil el entrenamiento). Se sube a GPU aunque el
+    # modo sea low-vram. Coste: ~5,2 GiB solo en pesos fp16, mas gradientes y estado
+    # del optimizador; ver el calculo de VRAM en 10_PLAN_IMPLEMENTACION_V14.md.
+    if args.train_garmentnet:
+        accelerator.print(
+            f"[train][v14] --train_garmentnet: moviendo el GarmentNet entrenable a "
+            f"{accelerator.device} en {weight_dtype} (~5,2 GiB solo en pesos)"
+        )
+        unet_encoder.to(accelerator.device, dtype=weight_dtype)
 
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     text_encoder_2.requires_grad_(False)
     image_encoder.requires_grad_(False)
-    unet_encoder.requires_grad_(False)
+    # V14: con --train_garmentnet el GarmentNet deja de estar congelado (receta C2).
+    unet_encoder.requires_grad_(args.train_garmentnet)
 
     if args.train_ip_adapter_only:
         unet.requires_grad_(False)
@@ -573,6 +596,9 @@ def main():
         unet.enable_gradient_checkpointing()
         unet_encoder.enable_gradient_checkpointing()
     unet.train()
+    if args.train_garmentnet:
+        # modo train para que dropout/estadisticas y el gradient checkpointing apliquen
+        unet_encoder.train()
 
     if args.use_8bit_adam and not args.low_vram_training:
         try:
@@ -591,6 +617,14 @@ def main():
         optimizer_class = torch.optim.AdamW
 
     trainable_params = [p for p in unet.parameters() if p.requires_grad]
+    # V14: el GarmentNet entrenable tambien entra en el optimizador (receta C2).
+    if args.train_garmentnet:
+        garmentnet_params = [p for p in unet_encoder.parameters() if p.requires_grad]
+        trainable_params += garmentnet_params
+        accelerator.print(
+            f"[train][v14] GarmentNet trainable tensors: {len(garmentnet_params)} "
+            f"({sum(p.numel() for p in garmentnet_params) / 1e9:.2f}B parameters)"
+        )
     if len(trainable_params) == 0:
         raise ValueError("No trainable parameters were found. Check training flags.")
 
@@ -613,6 +647,16 @@ def main():
 
         compact_state = torch.load(weights_path, map_location="cpu")
         current_trainable = {name: parameter for name, parameter in unet.named_parameters() if parameter.requires_grad}
+        # V14: los pesos del GarmentNet entrenable se guardan con el prefijo
+        # "unet_encoder." (ver el guardado de checkpoints) para poder reanudar la C2.
+        if args.train_garmentnet:
+            current_trainable.update(
+                {
+                    f"unet_encoder.{name}": parameter
+                    for name, parameter in unet_encoder.named_parameters()
+                    if parameter.requires_grad
+                }
+            )
         missing_names = sorted(set(current_trainable) - set(compact_state))
         unexpected_names = sorted(set(compact_state) - set(current_trainable))
         if missing_names or unexpected_names:
@@ -648,6 +692,13 @@ def main():
     accelerator.print(
         f"[train] trainable params: {trainable_count}/{total_params} ({100.0 * trainable_count / total_params:.2f}%)"
     )
+    if args.train_garmentnet:
+        garmentnet_total = sum(p.numel() for p in unet_encoder.parameters())
+        garmentnet_trainable = sum(p.numel() for p in unet_encoder.parameters() if p.requires_grad)
+        accelerator.print(
+            f"[train][v14] GarmentNet: {garmentnet_trainable}/{garmentnet_total} trainable "
+            f"({100.0 * garmentnet_trainable / max(1, garmentnet_total):.2f}% del GarmentNet)"
+        )
     
     train_dataset = VitonHDDataset(
         dataroot_path=args.data_dir,
@@ -759,6 +810,19 @@ def main():
             for name, parameter in unwrapped_unet.named_parameters()
             if parameter.requires_grad
         }
+        # V14: el GarmentNet entrenable se guarda en el MISMO trainable_state.pt pero con
+        # el prefijo "unet_encoder." para distinguirlo de las claves del unet. El
+        # exportador (exportar_checkpoint_para_demo.py) entiende ese prefijo y fusiona
+        # los pesos en la subcarpeta unet_encoder/ del pipeline exportado.
+        if args.train_garmentnet:
+            unwrapped_garmentnet = accelerator.unwrap_model(unet_encoder, keep_fp32_wrapper=True)
+            trainable_state.update(
+                {
+                    f"unet_encoder.{name}": parameter.detach().cpu().clone()
+                    for name, parameter in unwrapped_garmentnet.named_parameters()
+                    if parameter.requires_grad
+                }
+            )
         optimizer_state = optimizer.state_dict()
         torch.save(trainable_state, os.path.join(temporary_path, "trainable_state.pt"))
         torch.save(optimizer_state, os.path.join(temporary_path, "optimizer_state.pt"))

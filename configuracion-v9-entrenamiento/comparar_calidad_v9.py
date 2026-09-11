@@ -145,6 +145,23 @@ def overlay_compact_checkpoint(unet, compact_checkpoint_dir):
     if not os.path.isfile(weights_path):
         raise FileNotFoundError(f"Compact checkpoint not found: {weights_path}")
     compact_state = torch.load(weights_path, map_location="cpu")
+    # V14: este comparador solo sabe superponer el unet. Un checkpoint de la receta C2
+    # (--train_garmentnet) trae ademas los pesos del GarmentNet con el prefijo
+    # "unet_encoder."; superponerlo aqui daria un gate SILENCIOSAMENTE incorrecto
+    # (mediria el GarmentNet oficial). Para esos checkpoints hay que exportar primero y
+    # comparar contra el pipeline exportado:
+    #   PYTHONPATH=. python exportar_checkpoint_para_demo.py --base_checkpoint <base> \
+    #       --compact_checkpoint <ckpt> --output_dir <export>
+    #   PYTHONPATH=. python comparar_calidad_v9.py \
+    #       --pretrained_model_name_or_path <export> ...
+    garmentnet_keys = [k for k in compact_state if k.startswith("unet_encoder.")]
+    if garmentnet_keys:
+        raise RuntimeError(
+            f"V14: el checkpoint contiene {len(garmentnet_keys)} tensores del GarmentNet "
+            "(prefijo 'unet_encoder.') y este comparador solo superpone el unet. Exporta el "
+            "checkpoint con exportar_checkpoint_para_demo.py y compara contra el pipeline "
+            "exportado (--pretrained_model_name_or_path <carpeta exportada>)."
+        )
     current_named = dict(unet.named_parameters())
     missing = sorted(set(compact_state) - set(current_named))
     if missing:
@@ -257,6 +274,14 @@ def main():
         scheduler=noise_scheduler, image_encoder=image_encoder, unet_encoder=unet_encoder,
         torch_dtype=weight_dtype,
     )
+    # V13: reducir el pico de VRAM del decode del VAE (mismo enfoque que la app),
+    # evita OOM en RTX 3060 12GB al terminar el denoising.
+    try:
+        pipe.enable_vae_tiling()
+        pipe.enable_vae_slicing()
+    except Exception as exc:
+        log(f"WARNING: no se pudo activar vae tiling/slicing: {exc}")
+
 
     step_state = {"t0": None, "n": args.num_inference_steps}
 
