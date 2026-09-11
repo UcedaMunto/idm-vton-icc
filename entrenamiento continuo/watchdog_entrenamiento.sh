@@ -18,13 +18,18 @@ GARMENTNET_PATH="${GARMENTNET_PATH:-stabilityai/stable-diffusion-xl-base-1.0}"
 IP_ADAPTER_PATH="${IP_ADAPTER_PATH:-ckpt/ip_adapter/ip-adapter-plus_sdxl_vit-h.bin}"
 IMAGE_ENCODER_PATH="${IMAGE_ENCODER_PATH:-ckpt/image_encoder}"
 
-BASE_CHECKPOINT="${BASE_CHECKPOINT:-/home/uceda/Documents/IDM-VTON/result_train_night/checkpoint-250}"
-# V13: cadena NUEVA desde cero (carpeta de resultados distinta a V10). El find de
-# resume no encontrara nada ahi -> arranca desde BASE_CHECKPOINT (cumulative 0).
-COMPACT_CHECKPOINT_ROOT="${COMPACT_CHECKPOINT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v13/produccion_continua}"
+# V14 (2026-09-08): reinicio DESDE CERO desde el modelo OFICIAL yisol/IDM-VTON
+# (snapshot local: result_train_v14/base_oficial). La base heredada
+# result_train_night/checkpoint-250 NO es el oficial (deriva de result_train/
+# checkpoint-100) y degrada la transferencia de la prenda
+# (ver configuracion-v13-entrenamiento/04_RESULTADO_AB.md, decision: partir
+# SIEMPRE del oficial). Carpeta de resultados nueva (V14): el find de resume no
+# encontrara nada al inicio -> arranca desde BASE_CHECKPOINT (cumulative 0).
+BASE_CHECKPOINT="${BASE_CHECKPOINT:-/home/uceda/Documents/IDM-VTON/result_train_v14/base_oficial}"
+COMPACT_CHECKPOINT_ROOT="${COMPACT_CHECKPOINT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v14/produccion_continua}"
 
-AUTO_OUTPUT_ROOT="${AUTO_OUTPUT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v13/produccion_continua}"
-LOG_ROOT="${LOG_ROOT:-/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v13}"
+AUTO_OUTPUT_ROOT="${AUTO_OUTPUT_ROOT:-/home/uceda/Documents/IDM-VTON/result_train_v14/produccion_continua}"
+LOG_ROOT="${LOG_ROOT:-/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14}"
 WATCHDOG_LOG="${WATCHDOG_LOG:-${LOG_ROOT}/watchdog.log}"
 LOCK_FILE="${LOCK_FILE:-${LOG_ROOT}/watchdog.lock}"
 PAUSE_FILE="${PAUSE_FILE:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/PAUSAR_WATCHDOG}"

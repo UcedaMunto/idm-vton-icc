@@ -11,9 +11,10 @@
 # el optimizer_state.pt (3.2 GiB) NO hace falta para pruebas ni exportacion.
 set -euo pipefail
 
+# V14 (2026-09-08): seguimiento de la cadena nueva desde el modelo oficial.
 PROJECT_ROOT="${PROJECT_ROOT:-/home/uceda/Documents/IDM-VTON}"
-COMPACT_ROOT="${COMPACT_ROOT:-${PROJECT_ROOT}/result_train_v13/produccion_continua}"
-PRESERVED_ROOT="${PRESERVED_ROOT:-${PROJECT_ROOT}/result_train_v10/pruebas_checkpoints}"
+COMPACT_ROOT="${COMPACT_ROOT:-${PROJECT_ROOT}/result_train_v14/produccion_continua}"
+PRESERVED_ROOT="${PRESERVED_ROOT:-${PROJECT_ROOT}/result_train_v14/pruebas_checkpoints}"
 
 mkdir -p "${PRESERVED_ROOT}"
 
