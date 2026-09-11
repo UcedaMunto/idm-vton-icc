@@ -2,6 +2,31 @@
 
 Fecha: 2026-08-29
 
+## ⚠️ ACTUALIZACION 2026-08-30 — A/B controlado: el fine-tuning DEGRADA la transferencia
+
+El A/B controlado sobre el par `048400_0` (prenda azul, seed 42, 448×576, 15 steps)
+**refuta el punto 2 de abajo** y cambia la conclusion:
+
+| Modelo | torso | veredicto |
+|---|---|---|
+| **OFICIAL `yisol/IDM-VTON`** | azul 54%, oscuro 0.1% | ✅ transfiere la prenda |
+| BASE local `result_train_night/checkpoint-250` | azul 4%, rojo 33%, oscuro 31% | ❌ torso negro/rojo |
+| V13-cum800 | azul 0%, rojo 63%, oscuro 31% | ❌ torso negro/rojo |
+| V12-cum1800 | azul 0%, rojo 90%, oscuro 26% | ❌ torso negro/rojo |
+
+**Hallazgo clave:** la "base local" NO era el modelo oficial: `result_train_night/
+checkpoint-250` deriva de `result_train/checkpoint-100` (una cadena de entrenamiento
+previa). El modelo oficial transfiere la prenda azul correctamente; **todos los
+checkpoints entrenados en el proyecto (V10/V11/V12/V13 y la "base" heredada) fallan
+igual** (torso negro + artefactos rojo/magenta). El sintoma NO es "faltan pasos" ni
+"comportamiento inherente del modelo": es **el fine-tuning actual el que corrompe el
+conditioning de color de la prenda**.
+
+**Decision:** revertir a `yisol/IDM-VTON` en la app (`.env` ya actualizado). Redisenar
+la receta antes de volver a entrenar. Detalle completo en `04_RESULTADO_AB.md`.
+
+---
+
 ## Estado
 
 `DOCUMENTACION_DE_HALLAZGOS_Y_DECISIONES`. Este paquete recoge **todo lo
