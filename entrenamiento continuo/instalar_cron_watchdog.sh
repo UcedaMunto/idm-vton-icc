@@ -3,7 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCHDOG_SCRIPT="${SCRIPT_DIR}/watchdog_entrenamiento.sh"
-LOG_DIR="/home/uceda/Documents/IDM-VTON/logs/produccion_continua"
+# V14 (2026-09-10): el watchdog escribe en logs/produccion_continua_v14; el log de cron
+# debe apuntar a la misma raiz (antes apuntaba a logs/produccion_continua, que era la
+# raiz de la cadena V13).
+LOG_DIR="/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14"
 CRON_LOG="${LOG_DIR}/cron_watchdog.log"
 
 mkdir -p "${LOG_DIR}"
