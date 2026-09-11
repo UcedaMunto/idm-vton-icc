@@ -16,6 +16,15 @@ comprar nada, que exige hardware y que exige una decision de negocio.
 | Respaldo con coste 0 | `backups/v14_estado_20260910/` por **hardlinks** (link count 2, mismos inodos): disco sin cambios (518G/48G libres antes y despues) |
 | Respaldo reproducible | `respaldo_entrenamiento_v14.sh` (+ `--verify` por sha256) |
 
+Nota sobre el "coste 0" del respaldo: `du -sh` informa ~9,5 GiB, pero son los mismos
+inodos que los checkpoints originales (los hardlinks no duplican datos). El espacio real
+anadido es el de los ficheros de texto (MANIFEST + verificacion.tsv) y la entrada de
+directorio; la prueba es que `df` no cambia antes y despues. La contrapartida es que el
+respaldo solo sobrevive mientras existan los datos compartidos: si se borra el original,
+el inodo sigue vivo por el hardlink, pero si se **sobrescribe** un fichero in-place,
+ambos cambian. En este proyecto los checkpoints se crean y se borran por directorio
+completo, nunca se reescriben, asi que el riesgo es nulo.
+
 Progreso acumulado de la V14 (verificable en `logs/produccion_continua_v14/*.meta`):
 
 | Pasos | run_id | Inicio | Fin | Estado |
