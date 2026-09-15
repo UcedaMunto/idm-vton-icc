@@ -44,9 +44,17 @@ FAILURE_PAUSE_FILE="${FAILURE_PAUSE_FILE:-/home/uceda/Documents/IDM-VTON/entrena
 GPU_LOCK_SRC="${GPU_LOCK_SRC:-/home/uceda/Documents/IDM-CUSTOM/src}"
 GPU_LOCK_CONSUMER="${GPU_LOCK_CONSUMER:-pista_a}"
 GPU_LOCK_PYTHON="${GPU_LOCK_PYTHON:-python3}"
+# Vacio = usa el lock por defecto de infra.gpu_lock (~/.idm_gpu.lock, el real
+# compartido con IDM-CUSTOM). Solo se fija a otra ruta en pruebas automatizadas
+# (ver IDM-CUSTOM/tests/integration/test_watchdog_gpu_lock_integration.py).
+GPU_LOCK_PATH="${GPU_LOCK_PATH:-}"
 
 gpu_lock_cli() {
-  PYTHONPATH="${GPU_LOCK_SRC}" "${GPU_LOCK_PYTHON}" -m infra.gpu_lock "$@"
+  local lock_args=()
+  if [[ -n "${GPU_LOCK_PATH}" ]]; then
+    lock_args=(--lock-path "${GPU_LOCK_PATH}")
+  fi
+  PYTHONPATH="${GPU_LOCK_SRC}" "${GPU_LOCK_PYTHON}" -m infra.gpu_lock "${lock_args[@]}" "$@"
 }
 
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-500}"
@@ -109,18 +117,21 @@ fi
 
 if [[ ! -f "${BASE_CHECKPOINT}/unet/config.json" ]]; then
   log "ERROR: checkpoint base invalido: ${BASE_CHECKPOINT}"
+  gpu_lock_cli release "${GPU_LOCK_CONSUMER}" >/dev/null 2>&1 || true
   exit 1
 fi
 
 FREE_GIB="$(df -BG --output=avail "${PROJECT_ROOT}" | tail -n 1 | tr -dc '0-9')"
 if (( FREE_GIB < MIN_FREE_GIB )); then
   log "ERROR: espacio libre insuficiente: ${FREE_GIB} GiB; minimo=${MIN_FREE_GIB} GiB"
+  gpu_lock_cli release "${GPU_LOCK_CONSUMER}" >/dev/null 2>&1 || true
   exit 1
 fi
 
 AVAILABLE_RAM_GIB="$(free -g | awk '/^Mem:/ {print $7}')"
 if (( AVAILABLE_RAM_GIB < MIN_AVAILABLE_RAM_GIB )); then
   log "ERROR: RAM disponible insuficiente: ${AVAILABLE_RAM_GIB} GiB; minimo=${MIN_AVAILABLE_RAM_GIB} GiB"
+  gpu_lock_cli release "${GPU_LOCK_CONSUMER}" >/dev/null 2>&1 || true
   exit 1
 fi
 
@@ -195,7 +206,7 @@ nohup bash -c '
   # Libera el turno de GPU (12.4.3) apenas termina accelerate launch, sea cual
   # sea el resultado, para que otro consumidor (reconstruccion/servicio) pueda
   # tomarlo de inmediato.
-  PYTHONPATH="'"${GPU_LOCK_SRC}"'" "'"${GPU_LOCK_PYTHON}"'" -m infra.gpu_lock release "'"${GPU_LOCK_CONSUMER}"'" || true
+  PYTHONPATH="'"${GPU_LOCK_SRC}"'" "'"${GPU_LOCK_PYTHON}"'" -m infra.gpu_lock '"${GPU_LOCK_PATH:+--lock-path \"${GPU_LOCK_PATH}\"}"' release "'"${GPU_LOCK_CONSUMER}"'" || true
 
   {
     echo "run_id='"${RUN_ID}"'"
