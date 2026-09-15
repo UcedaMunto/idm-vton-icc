@@ -37,6 +37,18 @@ LOCK_FILE="${LOCK_FILE:-${LOG_ROOT}/watchdog.lock}"
 PAUSE_FILE="${PAUSE_FILE:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/PAUSAR_WATCHDOG}"
 FAILURE_PAUSE_FILE="${FAILURE_PAUSE_FILE:-/home/uceda/Documents/IDM-VTON/entrenamiento continuo/PAUSAR_POR_ERROR}"
 
+# Turno unico de GPU entre la Pista A, la reconstruccion comercial (IDM-CUSTOM)
+# y su servicio de inferencia (decision 12.4.3 de IDM-CUSTOM/12_DUDAS_Y_DECISIONES_PENDIENTES.md).
+# `infra.gpu_lock` es una CLI de solo libreria estandar (sin dependencias de
+# torch/diffusers), por eso se puede invocar aqui sin activar ningun conda env.
+GPU_LOCK_SRC="${GPU_LOCK_SRC:-/home/uceda/Documents/IDM-CUSTOM/src}"
+GPU_LOCK_CONSUMER="${GPU_LOCK_CONSUMER:-pista_a}"
+GPU_LOCK_PYTHON="${GPU_LOCK_PYTHON:-python3}"
+
+gpu_lock_cli() {
+  PYTHONPATH="${GPU_LOCK_SRC}" "${GPU_LOCK_PYTHON}" -m infra.gpu_lock "$@"
+}
+
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-500}"
 CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-100}"
 LOGGING_STEPS="${LOGGING_STEPS:-100}"
@@ -84,6 +96,14 @@ fi
 # Si cualquier proceso train_xl.py o Gradio esta activo, no lanzamos otro.
 if pgrep -fa 'train_xl.py|gradio_demo/app.py' >/dev/null; then
   log "Entrenamiento o Gradio activo detectado. No se lanza nueva corrida."
+  exit 0
+fi
+
+# Turno unico de GPU (12.4.3): si la reconstruccion (entrenamiento o servicio)
+# ya tiene el turno, no lanzamos nada nuevo. Esto detecta consumidores que el
+# pgrep de arriba no reconoce (procesos de IDM-CUSTOM, no train_xl.py/gradio).
+if ! gpu_lock_cli acquire "${GPU_LOCK_CONSUMER}" >/dev/null 2>&1; then
+  log "GPU en uso por otro consumidor ($(gpu_lock_cli status 2>/dev/null || echo "desconocido")). No se lanza nueva corrida."
   exit 0
 fi
 
@@ -172,6 +192,11 @@ nohup bash -c '
     > "'"${RUN_LOG}"'" 2>&1
   run_status=$?
 
+  # Libera el turno de GPU (12.4.3) apenas termina accelerate launch, sea cual
+  # sea el resultado, para que otro consumidor (reconstruccion/servicio) pueda
+  # tomarlo de inmediato.
+  PYTHONPATH="'"${GPU_LOCK_SRC}"'" "'"${GPU_LOCK_PYTHON}"'" -m infra.gpu_lock release "'"${GPU_LOCK_CONSUMER}"'" || true
+
   {
     echo "run_id='"${RUN_ID}"'"
     echo "finished_at=$(date "+%Y-%m-%d %H:%M:%S")"
@@ -219,6 +244,18 @@ nohup bash -c '
     printf "[%s] Checkpoints intermedios de '"${RUN_ID}"' eliminados; se conserva solo '"${EXPECTED_CHECKPOINT}"'.\n" "$(date "+%Y-%m-%d %H:%M:%S")" >> "'"${WATCHDOG_LOG}"'"
   fi
 ' > /dev/null 2>&1 < /dev/null &
+BG_PID=$!
 disown
+
+# Re-registra el turno de GPU (12.4.3) con el PID real y de larga vida del
+# proceso en segundo plano (el `acquire` de mas arriba se hizo con el PID
+# efimero de la CLI, que ya no existe). Si otro consumidor gano la carrera en
+# esta ventana minima, se aborta la corrida recien lanzada en vez de dejar dos
+# consumidores usando la GPU a la vez.
+if ! gpu_lock_cli acquire "${GPU_LOCK_CONSUMER}" --pid "${BG_PID}" >/dev/null 2>&1; then
+  log "ERROR: se perdio el turno de GPU justo tras lanzar la corrida (otro consumidor: $(gpu_lock_cli status 2>/dev/null || echo "desconocido")). Matando run_id=${RUN_ID} (pid=${BG_PID})."
+  kill "${BG_PID}" 2>/dev/null || true
+  exit 0
+fi
 
 log "Corrida lanzada en segundo plano. run_id=${RUN_ID} (el watchdog no espera; el resultado se registra en ${RUN_META} y en ${WATCHDOG_LOG} al terminar). Al finalizar OK, se guardara una imagen de muestra en ${REVIEW_ROOT}/${RUN_ID}."
