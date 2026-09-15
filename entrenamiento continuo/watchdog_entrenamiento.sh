@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Watchdog V10 de entrenamiento continuo para IDM-VTON.
+# Watchdog de entrenamiento continuo para IDM-VTON (actualmente en V14).
 # Se ejecuta cada minuto y, si no hay entrenamiento activo, lanza un bloque de
-# MAX_TRAIN_STEPS pasos desde el ultimo checkpoint compacto, usando la mejor
-# configuracion validada en configuracion-v10-entrenamiento (Tier1 GPU hibrido +
+# MAX_TRAIN_STEPS pasos desde el ultimo checkpoint compacto, usando la base
+# hibrida GPU/CPU validada desde configuracion-v10-entrenamiento (Tier1 GPU +
 # --garmentnet_dtype=float32 + --cpu_threads=12; ~55-58s/paso en regimen
-# estacionario, ver configuracion-v10-entrenamiento/02_PRUEBA_ESTABILIDAD_20_PASOS.md).
+# estacionario, ver configuracion-v10-entrenamiento/02_PRUEBA_ESTABILIDAD_20_PASOS.md)
+# mas los ajustes de dataset/optimizador/learning rate de V11-V13 y el reinicio
+# desde el modelo oficial de V14 (ver configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md).
 
 PROJECT_ROOT="${PROJECT_ROOT:-/home/uceda/Documents/IDM-VTON}"
 CONDA_SH="${CONDA_SH:-/home/uceda/miniconda3/etc/profile.d/conda.sh}"

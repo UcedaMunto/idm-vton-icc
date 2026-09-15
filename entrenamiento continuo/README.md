@@ -2,17 +2,22 @@
 
 Este paquete crea una tarea programada que se ejecuta cada minuto. Si NO detecta
 un proceso de entrenamiento (ni Gradio) activo, lanza automaticamente un bloque
-de 500 pasos desde el ultimo checkpoint compacto, usando la mejor configuracion
-validada en `configuracion-v10-entrenamiento` (Tier1 GPU hibrido +
+de 500 pasos desde el ultimo checkpoint compacto, usando el modo hibrido GPU/CPU
+validado en [configuracion-v10-entrenamiento](../configuracion-v10-entrenamiento/README.md) (Tier1 GPU +
 `--garmentnet_dtype=float32` + `--cpu_threads=12`; ~55-58s/paso en regimen
-estacionario, 500 pasos ≈ 7.6-8.1 horas). Como cada bloque dura varias horas, en
-la practica esto mantiene al equipo entrenando de forma continua durante todo el
-dia, encadenando bloques de 500 pasos uno tras otro sin intervencion manual.
+estacionario, 500 pasos ≈ 7.6-8.1 horas), mas las correcciones de muestreo de
+dataset/optimizador de V11-V13 y el reinicio desde el modelo oficial de V14.
+Como cada bloque dura varias horas, en la practica esto mantiene al equipo
+entrenando de forma continua durante todo el dia, encadenando bloques de 500
+pasos uno tras otro sin intervencion manual.
 
 Ruta base:
 - `/home/uceda/Documents/IDM-VTON/entrenamiento continuo`
 
-Actualizado el 2026-08-22 para usar la configuracion V10 (antes usaba V4/V3 con
+Actualizado el 2026-09-10 para usar la configuracion V14 (reinicio desde el
+modelo oficial `yisol/IDM-VTON`, cadena en `result_train_v14/produccion_continua`;
+ver [configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md](../configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md)). El nucleo
+de optimizacion GPU/CPU sigue siendo el de V10 (antes usaba V4/V3 con
 `--garmentnet_dtype=bfloat16`, el bug de rendimiento corregido en V9/V10).
 
 ## Archivos
@@ -80,7 +85,7 @@ tardar en 1 minuto, retoma solo.)
 3. Corregir la causa raiz si aplica.
 4. Borrar el archivo para que el watchdog vuelva a intentar: `rm -f "/home/uceda/Documents/IDM-VTON/entrenamiento continuo/PAUSAR_POR_ERROR"`.
 
-## Parametros usados por defecto (watchdog, configuracion V10)
+## Parametros usados por defecto (watchdog, configuracion V14)
 
 - `--max_train_steps=500`
 - `--checkpointing_steps=100`
@@ -90,8 +95,9 @@ tardar en 1 minuto, retoma solo.)
 - `--width=448`, `--height=576`
 - `--low_vram_training --train_ip_adapter_only --gradient_checkpointing`
 - `--hybrid_small_models_gpu --garmentnet_dtype=float32 --cpu_threads=12` (optimizacion V10)
-- `--resume_from_checkpoint=<ultimo checkpoint compacto en result_train_v10/produccion_continua, o ninguno en el primer bloque>`
-- Base fija (pesos congelados/arquitectura): `result_train_night/checkpoint-250`
+- `--resume_optimizer_state` + `--learning_rate=2e-5` (V12/V13)
+- `--resume_from_checkpoint=<ultimo checkpoint compacto en result_train_v14/produccion_continua, o ninguno en el primer bloque>`
+- Base fija (pesos congelados/arquitectura): `result_train_v14/base_oficial` (snapshot local de `yisol/IDM-VTON`, ver V14; ya no se usa `result_train_night/checkpoint-250`, ver V13)
 
 Todos los valores se pueden sobreescribir con variables de entorno (ver el
 encabezado de `watchdog_entrenamiento.sh`), por ejemplo para una prueba manual
@@ -104,26 +110,46 @@ con menos pasos: `MAX_TRAIN_STEPS=1 CHECKPOINTING_STEPS=1 bash watchdog_entrenam
   (3.2 GiB) que ya se persistia en cada checkpoint. Elimina el reinicio del
   optimizador entre bloques (factor agravante documentado en V11). Costo extra
   de RAM ~3.4 GiB al reanudar. Para desactivar: `RESUME_OPTIMIZER_STATE=""`.
-- `LEARNING_RATE=5e-5` (nuevo, default V12 produccion): learning rate del
+- `LEARNING_RATE=2e-5` (default V13 produccion; antes V12 usaba `5e-5`): learning rate del
   fine-tune. 1e-5 (default original) no movia el modelo (~0.7% de deriva por
-  bloque de 500 pasos); 5e-5 es la receta recomendada para solo IP-Adapter con
-  batch 1 en este hardware (ver `configuracion-v12-entrenamiento`).
+  bloque de 500 pasos); 5e-5 resulto ser mas riesgo del necesario (ver
+  [configuracion-v13-entrenamiento/02_EVALUACION_CAUSAS_CHATGPT.md](../configuracion-v13-entrenamiento/02_EVALUACION_CAUSAS_CHATGPT.md)); 2e-5 es la
+  receta actual para solo IP-Adapter con batch 1 en este hardware.
 - Correccion de la revision visual: `comparar_calidad_v9.py` se invoca con
   `PYTHONPATH=<repo>` para que importe `src.*` (antes fallaba siempre con
   `ModuleNotFoundError: No module named 'src'`).
 
+### V13 (2026-08-30)
+
+- `LEARNING_RATE` baja de `5e-5` (V12) a `2e-5`: el A/B controlado de V13 mostro
+  que `5e-5` era mas riesgo del necesario sin mejora clara adicional (ver
+  [configuracion-v13-entrenamiento/04_RESULTADO_AB.md](../configuracion-v13-entrenamiento/04_RESULTADO_AB.md)).
+
+### V14 (2026-09-10)
+
+- Reinicio DESDE CERO desde el modelo oficial `yisol/IDM-VTON` en vez de
+  `result_train_night/checkpoint-250`: ese checkpoint heredado derivaba de
+  `result_train/checkpoint-100` y degradaba la transferencia de la prenda (ver
+  [configuracion-v13-entrenamiento/04_RESULTADO_AB.md](../configuracion-v13-entrenamiento/04_RESULTADO_AB.md)).
+- `BASE_CHECKPOINT` y `COMPACT_CHECKPOINT_ROOT`/`AUTO_OUTPUT_ROOT` pasan a
+  `result_train_v14/base_oficial` y `result_train_v14/produccion_continua`.
+- `LOG_ROOT` pasa a `logs/produccion_continua_v14` (el log de cron tambien se
+  actualizo en `instalar_cron_watchdog.sh`).
+- Detalle completo del estado y progreso acumulado en
+  [configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md](../configuracion-v14-entrenamiento/10_PLAN_IMPLEMENTACION_V14.md).
+
 ## Donde quedan los artefactos
 
 - Log principal watchdog:
-  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua/watchdog.log`
+  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14/watchdog.log`
 - Log de cron:
-  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua/cron_watchdog.log`
+  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14/cron_watchdog.log`
 - Logs por corrida:
-  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua/train_run_YYYYmmdd_HHMMSS.log`
+  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14/train_run_YYYYmmdd_HHMMSS.log`
 - Metadatos por corrida (inicio y fin, con exit_code):
-  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua/train_run_YYYYmmdd_HHMMSS.meta`
+  - `/home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14/train_run_YYYYmmdd_HHMMSS.meta`
 - Salida de modelos (checkpoints compactos, cadena de produccion real):
-  - `/home/uceda/Documents/IDM-VTON/result_train_v10/produccion_continua/run_YYYYmmdd_HHMMSS/`
+  - `/home/uceda/Documents/IDM-VTON/result_train_v14/produccion_continua/run_YYYYmmdd_HHMMSS/`
 
 ## Validacion rapida
 
@@ -132,13 +158,13 @@ con menos pasos: `MAX_TRAIN_STEPS=1 CHECKPOINTING_STEPS=1 bash watchdog_entrenam
 crontab -l
 
 # 2) Ver actividad watchdog
-tail -n 50 /home/uceda/Documents/IDM-VTON/logs/produccion_continua/watchdog.log
+tail -n 50 /home/uceda/Documents/IDM-VTON/logs/produccion_continua_v14/watchdog.log
 
 # 3) Ver si hay entrenamiento activo
 ps -eo pid,ppid,cmd --forest | grep -E 'train_xl.py|accelerate launch' | grep -v grep
 
 # 4) Ver ultimos checkpoints compactos de la cadena real
-find /home/uceda/Documents/IDM-VTON/result_train_v10/produccion_continua -maxdepth 3 -type d -name 'checkpoint-*' | sort -V
+find /home/uceda/Documents/IDM-VTON/result_train_v14/produccion_continua -maxdepth 3 -type d -name 'checkpoint-*' | sort -V
 ```
 
 ## Desinstalar tarea programada
@@ -154,5 +180,12 @@ crontab -l
 - Si, en general mas steps pueden mejorar el modelo, pero no siempre linealmente.
 - Entrenar en bloques de 500 steps puede mejorar mientras la perdida y resultados visuales sigan mejorando.
 - Tambien existe riesgo de sobreajuste (overfitting) si se repite demasiado sobre el mismo dataset.
-- Recomendacion: validar visualmente cada cierto numero de checkpoints (por ejemplo cada 500 o 1000 steps, usando `configuracion-v9-entrenamiento/comparar_calidad_v9.py`, que ya corre rapido con la correccion de dtype) y detener/pausar (`PAUSAR_WATCHDOG`) cuando ya no haya mejora clara o se quiera decidir si promover un checkpoint.
+- Recomendacion: validar visualmente cada cierto numero de checkpoints (por ejemplo cada 500 o 1000 steps, usando [configuracion-v9-entrenamiento/comparar_calidad_v9.py](../configuracion-v9-entrenamiento/comparar_calidad_v9.py), que ya corre rapido con la correccion de dtype) y detener/pausar (`PAUSAR_WATCHDOG`) cuando ya no haya mejora clara o se quiera decidir si promover un checkpoint.
 - Nota sobre limpieza automatica: desde el 2026-08-23 el watchdog borra los checkpoints intermedios de cada bloque de 500 (deja solo el final) para no llenar el disco. Esto significa que ya no se puede comparar, por ejemplo, el checkpoint-100 contra el checkpoint-400 de un mismo bloque una vez que ese bloque termino; solo quedan los checkpoints "de cierre" de cada bloque (cada 500 pasos). Si se necesita mas granularidad para una comparacion puntual, pausar el watchdog (`PAUSAR_WATCHDOG`) antes de que termine el bloque de interes y copiar manualmente el checkpoint intermedio deseado a otra carpeta.
+
+## Ver tambien
+
+- [../README.md](../README.md) — comandos rapidos de arranque/parada de la app y del entrenamiento.
+- [../GUIA_ENTRENAMIENTO_IDMVTON.md](../GUIA_ENTRENAMIENTO_IDMVTON.md) — version manual (paso a paso) de este mismo entrenamiento.
+- [../configuracion-v14-entrenamiento/README.md](../configuracion-v14-entrenamiento/README.md) — configuracion y receta activas actualmente.
+- [../INDEX.md](../INDEX.md) — indice completo de toda la documentacion del proyecto.

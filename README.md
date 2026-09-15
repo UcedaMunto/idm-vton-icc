@@ -16,6 +16,53 @@ Star ⭐ us if you like it!
 
 ---
 
+## Comandos rápidos
+
+### 1. Levantar el proyecto web (Gradio)
+
+```bash
+./run_gpu_with_logs.sh
+```
+
+Activa el entorno `idm`, comprueba que el puerto 7860 esté libre y lanza `gradio_demo/app.py` con logs en `logs/`. Abrir en el navegador: http://127.0.0.1:7860
+
+### 2. Detener el proyecto web
+
+```bash
+pkill -f 'python .*gradio_demo/app.py'
+```
+
+Mata el proceso de la app de Gradio (libera la GPU para el entrenamiento).
+
+### 3. Poner a trabajar el entrenamiento (continuo, vía cron)
+
+```bash
+cd "entrenamiento continuo" && rm -f PAUSAR_WATCHDOG
+```
+
+Quita la pausa del watchdog; en el siguiente tick de cron (máx. 1 min) reanuda/encadena bloques de 500 pasos automáticamente desde el último checkpoint. (Si el cron no está instalado, instalarlo antes con `./instalar_cron_watchdog.sh`.)
+
+### 4. Detener el entrenamiento
+
+```bash
+touch "entrenamiento continuo/PAUSAR_WATCHDOG" && pkill -f 'train_xl.py'
+```
+
+Pausa el watchdog (no relanza nada nuevo) y mata el entrenamiento en curso; el progreso se conserva hasta el último checkpoint guardado (cada 100 pasos).
+
+### Documentación relacionada
+
+- [INDEX.md](INDEX.md) — índice completo de toda la documentación del proyecto y su vigencia.
+- [GUIA_INSTALACION_IDMVTON.md](GUIA_INSTALACION_IDMVTON.md) — instalación paso a paso y fixes conocidos.
+- [GUIA_AJUSTES_GPU_12GB.md](GUIA_AJUSTES_GPU_12GB.md) — ajustes para correr en una GPU de 12 GB.
+- [GUIA_CAMBIO_MODELO_ENTRENADO_IDMVTON.md](GUIA_CAMBIO_MODELO_ENTRENADO_IDMVTON.md) — alternar entre modelo base y modelo entrenado.
+- [GUIA_ENTRENAMIENTO_IDMVTON.md](GUIA_ENTRENAMIENTO_IDMVTON.md) — entrenamiento manual paso a paso.
+- [entrenamiento continuo/README.md](entrenamiento%20continuo/README.md) — entrenamiento automático continuo (watchdog + cron).
+- [../IDM-CUSTOM/README.md](../IDM-CUSTOM/README.md) — plan de reconstrucción limpia (clean-room) para uso comercial (proyecto separado).
+- [terminologia_configuraciones_tecnologias/LECTURA_PERSONALIZADA_TERMINOS_TECNOLOGIAS_IDMVTON.md](terminologia_configuraciones_tecnologias/LECTURA_PERSONALIZADA_TERMINOS_TECNOLOGIAS_IDMVTON.md) — glosario de términos de IA traducidos a arquitectura de software.
+
+---
+
 
 ![teaser2](assets/teaser2.png)&nbsp;
 ![teaser](assets/teaser.png)&nbsp;
